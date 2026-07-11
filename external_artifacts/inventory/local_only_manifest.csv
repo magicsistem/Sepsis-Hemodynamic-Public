@@ -1,0 +1,6 @@
+name,file_count,total_size_bytes,git_policy,note
+local_manuscript_tree,12,1054330,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+local_manuscript_asset_tree,23,380446,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+historical_audit_tree,21,164362,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+legacy_statistics_tree,28,127021,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+detailed_external_inventory_tree,15,265451,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.

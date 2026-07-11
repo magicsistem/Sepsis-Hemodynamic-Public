@@ -1,0 +1,23 @@
+\begin{table*}[!t]
+\centering
+\caption{Primary internal cross-validation metrics.}
+\label{tab:phase8_primary_metrics}
+\footnotesize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lllll}
+\toprule
+\textbf{Metric} & \textbf{Baseline} & \textbf{Enhanced} & \textbf{Delta} & \textbf{Interpretation} \\
+\midrule
+Raw AUROC & 0.9315 & 0.9343 & +0.0028 & Enhanced improved \\
+Raw AUPRC & 0.3060 & 0.3264 & +0.0204 & Enhanced improved \\
+Raw Brier score & 0.0701 & 0.0626 & -0.0075 & Enhanced improved \\
+Raw ECE & 0.1501 & 0.1301 & -0.0200 & Enhanced improved \\
+Isotonic Brier score & 0.01455 & 0.01432 & -0.00023 & Enhanced improved \\
+Isotonic ECE & $1.09\times10^{-4}$ & $6.91\times10^{-5}$ & $-3.95\times10^{-5}$ & Enhanced improved \\
+Raw Utility at 0.5 & 0.5015 & 0.4955 & -0.0060 & Enhanced worse \\
+Best raw Utility & 0.5057 & 0.5010 & -0.0047 & Enhanced worse \\
+Best raw Utility threshold & 0.45 & 0.41 & -0.04 & Descriptive difference; not interpreted as model improvement \\
+Final numeric features & 287 & 305 & +18 & Descriptive difference; not interpreted as model improvement \\
+\bottomrule
+\end{tabular*}
+\end{table*}

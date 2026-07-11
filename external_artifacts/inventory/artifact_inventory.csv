@@ -1,0 +1,10 @@
+category,name,file_count,total_size_bytes,git_policy,note
+public_compact_result,results/final_tables,9,12384,version_public_compact_outputs,Public reproducibility output directory.
+public_compact_result,results/final_figures,7,360707,version_public_compact_outputs,Public reproducibility output directory.
+public_compact_result,results/statistics,27,117240,version_public_compact_outputs,Public reproducibility output directory.
+public_compact_result,results/internal_robustness,10,38974,version_public_compact_outputs,Public reproducibility output directory.
+local_only,local_manuscript_tree,12,1054330,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+local_only,local_manuscript_asset_tree,23,380446,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+local_only,historical_audit_tree,21,164362,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+local_only,legacy_statistics_tree,28,127021,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.
+local_only,detailed_external_inventory_tree,15,265451,keep_on_disk_not_public,Retained locally for provenance; not required by the public workflow.

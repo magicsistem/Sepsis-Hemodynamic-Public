@@ -1,0 +1,19 @@
+\begin{table*}[!t]
+\centering
+\caption{Feature-count audit for final model inputs.}
+\label{tab:phase8_feature_counts}
+\footnotesize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llll}
+\toprule
+\textbf{Item} & \textbf{Value} & \textbf{Status} & \textbf{Note} \\
+\midrule
+Baseline final numeric features & 287 & OK & After meta/non-numeric exclusion \\
+Enhanced final numeric features & 305 & OK & Baseline plus hemodynamic complexity \\
+Added hemodynamic complexity features & 18 & OK & Enhanced minus baseline numeric features \\
+Expected hemodynamic features & 18 & OK & Six signals times CV/IQR/SampEn \\
+Hemodynamic features in enhanced importance & 18 & OK & Present in enhanced feature-importance summary \\
+SampEn features found & 6/6 & OK & All six SampEn descriptors present \\
+\bottomrule
+\end{tabular*}
+\end{table*}

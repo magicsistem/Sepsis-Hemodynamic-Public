@@ -1,0 +1,9 @@
+# Final Figures Manifest
+
+| path | size_bytes | sha256 | category | git_policy | source_note |
+|---|---:|---|---|---|---|
+| results/final_figures/calibration_summary.png | 74886 | be422c455d9833d2dca1cac35aa857bd49c8e6368b6ed5ac0038ff8990774c3c | final_figure | public_compact_reproducible | Generated or copied into the clean public result layout. |
+| results/final_figures/hemodynamic_importance.png | 86011 | 5ad269e19a1fbca5778750f6526c1d2c56907e62b0ec4f65d2f453c80682592e | final_figure | public_compact_reproducible | Generated or copied into the clean public result layout. |
+| results/final_figures/raw_precision_recall_curve.png | 59282 | c8ac52d93b149e308fbc4de040a4ca2cfef77a8571027834fe2a6a3f355859f3 | final_figure | public_compact_reproducible | Generated or copied into the clean public result layout. |
+| results/final_figures/raw_roc_curve.png | 71534 | fcc85aeff0fd2991a2779573bcd441753c1757a42738c72ab276169c39fdf7dc | final_figure | public_compact_reproducible | Generated or copied into the clean public result layout. |
+| results/final_figures/utility_thresholds.png | 66585 | 01c93d6d48e1a0e0881a6810e17344b770fad3085c407e1a5bae9767d9c81155 | final_figure | public_compact_reproducible | Generated or copied into the clean public result layout. |

@@ -1,0 +1,78 @@
+# Data and large artifacts
+/data/
+/logs/
+/results/
+/checkpoints/
+external_artifacts/logs/
+external_artifacts/results_*/
+external_artifacts/local_only_inventory/
+local_only/
+
+# Heavy data/model formats
+*.zip
+*.csv
+*.parquet
+*.joblib
+*.pkl
+*.pth
+*.pt
+*.h5
+
+# Python/cache/runtime
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SLURM/runtime logs
+*.out
+*.err
+*.log
+log_slurm_*.txt
+
+# Local environments and editor state
+.env
+.venv/
+venv/
+.DS_Store
+
+# Historical/local-only documents
+/docs/audits/
+/docs/[Pp][Hh][Aa][Ss][Ee]*.md
+/docs/reviews/
+
+# Keep generated inventory files versionable; these are not datasets.
+!external_artifacts/inventory/
+!external_artifacts/inventory/**
+!external_artifacts/inventory/*.csv
+
+# Manuscript sources are local-only for the public GitHub/main tree.
+/manuscript/
+/results/*manuscript*/
+
+# Curated public result summaries and figures.
+# Keep raw results, OOF predictions, models, caches, and logs ignored.
+!/results/
+/results/*
+!/results/final_tables/
+!/results/final_tables/**
+!/results/final_tables_tex/
+!/results/final_tables_tex/**
+!/results/final_figures/
+!/results/final_figures/**
+!/results/statistics/
+!/results/statistics/**
+!/results/internal_robustness/
+!/results/internal_robustness/**
+
+# Public reproducibility input for Zenodo/GitHub snapshot.
+# Keep the raw PhysioNet/CinC 2019 archive trackable, but keep processed data ignored.
+/data/*
+!/data/
+/data/raw/*
+!/data/raw/
+!/data/raw/archive.zip
+/data/processed/

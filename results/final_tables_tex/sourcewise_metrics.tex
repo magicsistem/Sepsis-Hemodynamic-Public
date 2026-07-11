@@ -1,0 +1,17 @@
+\begin{table*}[!t]
+\centering
+\caption{Internal source-wise heterogeneity summary. SourceSet A/B is an internal public-training split analysis, not external validation; Utility at threshold 0.5 worsened in both sources despite AUPRC gains.}
+\label{tab:phase8_phase4_sourcewise}
+\footnotesize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llllllll}
+\toprule
+\textbf{Source} & \textbf{Model} & \textbf{Patients} & \textbf{Septic patients} & \textbf{Raw AUROC} & \textbf{Raw AUPRC} & \textbf{Raw Utility at 0.5} & \textbf{Delta vs baseline} \\
+\midrule
+A & Baseline & 20336 & 1790 & 0.9248 & 0.3051 & 0.5335 & -- \\
+A & Enhanced & 20336 & 1790 & 0.9297 & 0.3250 & 0.5324 & AUROC +0.0049; AUPRC +0.0199 \\
+B & Baseline & 20000 & 1142 & 0.9373 & 0.3092 & 0.4514 & -- \\
+B & Enhanced & 20000 & 1142 & 0.9378 & 0.3299 & 0.4377 & AUROC +0.0005; AUPRC +0.0207 \\
+\bottomrule
+\end{tabular*}
+\end{table*}

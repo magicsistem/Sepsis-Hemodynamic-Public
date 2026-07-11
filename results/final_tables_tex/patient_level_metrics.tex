@@ -1,0 +1,19 @@
+\begin{table*}[!t]
+\centering
+\caption{Patient-level operating metrics. Early-alert sensitivity counts septic patients detected before sepsis onset; any-alert sensitivity counts septic patients with any alert during the record; negative-patient specificity counts nonseptic patients with no alert; lead time is descriptive among early detections and should not be interpreted as Utility-rewarded lead time.}
+\label{tab:phase8_patient_level_metrics}
+\scriptsize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lllllll}
+\toprule
+\textbf{Model} & \textbf{Operating point} & \textbf{Threshold} & \textbf{Early-alert sens.} & \textbf{Any-alert sens.} & \textbf{Negative specificity} & \textbf{Lead time, h median [IQR]} \\
+\midrule
+Baseline & Raw 0.5 & 0.50 & 0.4502 & 0.9512 & 0.5906 & 21 [11--34] \\
+Baseline & Raw Utility optimal & 0.45 & 0.4666 & 0.9625 & 0.5339 & 21 [11--33] \\
+Baseline & Raw F1 optimal & 0.86 & 0.2422 & 0.7169 & 0.9293 & 24 [11--38] \\
+Enhanced & Raw 0.5 & 0.50 & 0.4335 & 0.9359 & 0.6297 & 21 [11--34] \\
+Enhanced & Raw Utility optimal & 0.41 & 0.4649 & 0.9604 & 0.5293 & 21 [11--33] \\
+Enhanced & Raw F1 optimal & 0.84 & 0.2476 & 0.7381 & 0.9196 & 23 [11--38] \\
+\bottomrule
+\end{tabular*}
+\end{table*}

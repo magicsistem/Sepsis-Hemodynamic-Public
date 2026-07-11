@@ -1,0 +1,12 @@
+item,value,expected_or_recommended,status,notes
+baseline_final_numeric_features,287,287,OK,Final baseline feature count after meta/non-numeric exclusion.
+enhanced_final_numeric_features,305,305,OK,Final enhanced feature count after adding hemodynamic complexity features.
+feature_delta,18,18,OK,Enhanced minus baseline numeric features.
+hemodynamic_expected_features,18,18,OK,Six signals times CV/IQR/SampEn.
+hemodynamic_found_in_enhanced_importance,18,18,OK,Count of hemodynamic features present in enhanced feature_importance_summary.csv.
+SampEn_found,6/6,6/6,OK,Correct paper wording if it still says five of six SampEn.
+meta_columns_excluded,"Patient_ID, TimeStep, SourceSet, SepsisLabel",Exclude from model inputs,OK,"Meta columns should remain traceability/label columns, not features."
+old_claim_71_77,71/77,Remove or replace with final feature counts 287/305 and +18 hemodynamic features.,CORRECT_MANUSCRIPT,Old paper claim to correct.
+old_claim_246_265,246/265,Remove or replace with final feature counts 287/305 and +18 hemodynamic features.,CORRECT_MANUSCRIPT,Old paper claim to correct.
+old_claim_five_of_six_SampEn,five of six SampEn,six of six SampEn features were present if audit status is OK.,CORRECT_MANUSCRIPT,Old paper claim to correct.
+recommended_wording,"The enhanced model adds 18 hemodynamic complexity features to the baseline feature set, yielding 305 final numeric predictors versus 287 in baseline after excluding meta columns.",Use this wording if counts match final artifacts.,RECOMMENDED,Paper-ready wording.

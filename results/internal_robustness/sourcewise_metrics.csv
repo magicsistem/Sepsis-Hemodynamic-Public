@@ -1,0 +1,7 @@
+group,level,model,status,reason,n_time_steps,n_patients,row_positives,row_negatives,patient_positives,patient_negatives,time_step_prevalence,patient_prevalence,auroc_raw,auprc_raw,delta_auroc_raw,delta_auprc_raw,brier_raw,ece_raw,utility_raw_at_0.5,utility_source,sensitivity_at_0.5,specificity_at_0.5,patient_sensitivity_at_0.5,patient_specificity_at_0.5
+SourceSet,A,baseline,OK,,790215,20336,17136,773079,1790,18546,0.0216852376,0.0880212431,0.924818274,0.305115383,,,0.0855676988,0.17420681,0.533509028,computed_from_repo_reporting_utility,0.787289916,0.885871948,0.967597765,0.4994608
+SourceSet,A,enhanced,OK,,790215,20336,17136,773079,1790,18546,0.0216852376,0.0880212431,0.92968046,0.324993658,,,0.0763521754,0.152461185,0.532384733,computed_from_repo_reporting_utility,0.781045752,0.898690819,0.954189944,0.549498544
+SourceSet,A,enhanced_minus_baseline,OK,,,,,,,,,,,,0.00486218632,0.0198782751,,,,,,,,
+SourceSet,B,baseline,OK,,761995,20000,10780,751215,1142,18858,0.0141470745,0.0571,0.937281834,0.309172749,,,0.0540728547,0.125058453,0.451427343,computed_from_repo_reporting_utility,0.736178108,0.932349594,0.925569177,0.680241807
+SourceSet,B,enhanced,OK,,761995,20000,10780,751215,1142,18858,0.0141470745,0.0571,0.937772714,0.329871555,,,0.0483355817,0.106954583,0.437737487,computed_from_repo_reporting_utility,0.709833024,0.939029439,0.907180385,0.70861173
+SourceSet,B,enhanced_minus_baseline,OK,,,,,,,,,,,,0.00049087942,0.0206988057,,,,,,,,

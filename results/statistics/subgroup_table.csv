@@ -1,0 +1,26 @@
+subgroup,metric,baseline,enhanced,delta,notes
+Age / 50-70,n_rows,660427.0,660427.0,0.0,Row/time-step count; do not present as patient count.
+Age / 50-70,n_patients,17224.0,17224.0,0.0,"Verify this count represents unique patients, not rows/time-steps."
+Age / 50-70,prevalence,0.017703697759177,0.017703697759177,0.0,
+Age / 50-70,AUROC,0.933355213727468,0.9365725708862052,0.0032173571587371663,
+Age / 50-70,AUPRC,0.3123688721375786,0.3338192324222794,0.02145036028470082,
+Age / <50,n_rows,341144.0,341144.0,0.0,Row/time-step count; do not present as patient count.
+Age / <50,n_patients,9176.0,9176.0,0.0,"Verify this count represents unique patients, not rows/time-steps."
+Age / <50,prevalence,0.0182884646952606,0.0182884646952606,0.0,
+Age / <50,AUROC,0.9325158884195686,0.935325546874504,0.0028096584549354153,
+Age / <50,AUPRC,0.3073372102244869,0.3280102335960514,0.020673023371564514,
+Age / >70,n_rows,550639.0,550639.0,0.0,Row/time-step count; do not present as patient count.
+Age / >70,n_patients,13936.0,13936.0,0.0,"Verify this count represents unique patients, not rows/time-steps."
+Age / >70,prevalence,0.0181334776505114,0.0181334776505114,0.0,
+Age / >70,AUROC,0.9270370865905372,0.9299143457109336,0.0028772591203963804,
+Age / >70,AUPRC,0.2889964605529177,0.3069196066413581,0.017923146088440367,
+Gender / 0,n_rows,684107.0,684107.0,0.0,Row/time-step count; do not present as patient count.
+Gender / 0,n_patients,17770.0,17770.0,0.0,"Verify this count represents unique patients, not rows/time-steps."
+Gender / 0,prevalence,0.0165953571590409,0.0165953571590409,0.0,
+Gender / 0,AUROC,0.931336426942018,0.934546554206808,0.003210127264789975,
+Gender / 0,AUPRC,0.2933363234337474,0.3107482959522989,0.017411972518551533,
+Gender / 1,n_rows,868103.0,868103.0,0.0,Row/time-step count; do not present as patient count.
+Gender / 1,n_patients,22566.0,22566.0,0.0,"Verify this count represents unique patients, not rows/time-steps."
+Gender / 1,prevalence,0.019079533189034,0.019079533189034,0.0,
+Gender / 1,AUROC,0.9304304502166568,0.933260170271206,0.0028297200545491785,
+Gender / 1,AUPRC,0.3097743059912545,0.3313466175035653,0.021572311512310816,

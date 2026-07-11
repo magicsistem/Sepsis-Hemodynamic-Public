@@ -1,0 +1,55 @@
+# Validation Checks
+
+- **baseline_dir_exists**: `PASS` - results/baseline
+- **baseline_required_file_summary_metrics.json**: `PASS` - results/baseline/summary_metrics.json
+- **baseline_required_file_metrics.json**: `PASS` - results/baseline/metrics.json
+- **baseline_required_file_threshold_metrics.csv**: `PASS` - results/baseline/threshold_metrics.csv
+- **baseline_required_file_oof_predictions.csv**: `PASS` - results/baseline/oof_predictions.csv
+- **baseline_required_file_fold_metrics.csv**: `PASS` - results/baseline/fold_metrics.csv
+- **baseline_required_file_subgroup_metrics.csv**: `PASS` - results/baseline/subgroup_metrics.csv
+- **baseline_required_file_feature_importance_summary.csv**: `PASS` - results/baseline/feature_importance_summary.csv
+- **baseline_required_file_zabihi_results.joblib**: `PASS` - results/baseline/zabihi_results.joblib
+- **baseline_optional_file_subgroup_metrics.csv**: `PASS` - results/baseline/subgroup_metrics.csv
+- **baseline_optional_file_calibration_bins_raw.csv**: `PASS` - results/baseline/calibration_bins_raw.csv
+- **baseline_optional_file_calibration_bins_platt.csv**: `PASS` - results/baseline/calibration_bins_platt.csv
+- **baseline_optional_file_calibration_bins_isotonic.csv**: `PASS` - results/baseline/calibration_bins_isotonic.csv
+- **baseline_optional_file_feature_category_summary.csv**: `PASS` - results/baseline/feature_category_summary.csv
+- **baseline_optional_file_feature_importance_all_folds.csv**: `PASS` - results/baseline/feature_importance_all_folds.csv
+- **enhanced_dir_exists**: `PASS` - results/enhanced
+- **enhanced_required_file_summary_metrics.json**: `PASS` - results/enhanced/summary_metrics.json
+- **enhanced_required_file_metrics.json**: `PASS` - results/enhanced/metrics.json
+- **enhanced_required_file_threshold_metrics.csv**: `PASS` - results/enhanced/threshold_metrics.csv
+- **enhanced_required_file_oof_predictions.csv**: `PASS` - results/enhanced/oof_predictions.csv
+- **enhanced_required_file_fold_metrics.csv**: `PASS` - results/enhanced/fold_metrics.csv
+- **enhanced_required_file_subgroup_metrics.csv**: `PASS` - results/enhanced/subgroup_metrics.csv
+- **enhanced_required_file_feature_importance_summary.csv**: `PASS` - results/enhanced/feature_importance_summary.csv
+- **enhanced_required_file_zabihi_results.joblib**: `PASS` - results/enhanced/zabihi_results.joblib
+- **enhanced_optional_file_subgroup_metrics.csv**: `PASS` - results/enhanced/subgroup_metrics.csv
+- **enhanced_optional_file_calibration_bins_raw.csv**: `PASS` - results/enhanced/calibration_bins_raw.csv
+- **enhanced_optional_file_calibration_bins_platt.csv**: `PASS` - results/enhanced/calibration_bins_platt.csv
+- **enhanced_optional_file_calibration_bins_isotonic.csv**: `PASS` - results/enhanced/calibration_bins_isotonic.csv
+- **enhanced_optional_file_feature_category_summary.csv**: `PASS` - results/enhanced/feature_category_summary.csv
+- **enhanced_optional_file_feature_importance_all_folds.csv**: `PASS` - results/enhanced/feature_importance_all_folds.csv
+- **baseline_expected_policy**: `PASS` - Expected current validated policy; observed current validated policy current_validated_policy
+- **enhanced_expected_policy**: `PASS` - Expected current validated policy; observed current validated policy current_validated_policy
+- **baseline_oof_required_columns**: `PASS` - Patient_ID, TimeStep, SepsisLabel, prob_raw
+- **baseline_oof_no_duplicate_patient_timestep**: `PASS` - No duplicated Patient_ID/TimeStep rows.
+- **baseline_label_binary**: `PASS` - SepsisLabel is binary 0/1.
+- **baseline_prob_raw_range**: `PASS` - [0, 1] 6.28898e-05 to 0.999057
+- **baseline_oof_rows**: `PASS` - OOF row count. 1552210
+- **baseline_unique_patients**: `PASS` - Unique Patient_ID count. 40336
+- **baseline_time_step_prevalence**: `PASS` - Mean SepsisLabel over rows. 0.01798468
+- **baseline_patient_prevalence**: `PASS` - Mean patient-level max SepsisLabel. 0.07268941
+- **enhanced_oof_required_columns**: `PASS` - Patient_ID, TimeStep, SepsisLabel, prob_raw
+- **enhanced_oof_no_duplicate_patient_timestep**: `PASS` - No duplicated Patient_ID/TimeStep rows.
+- **enhanced_label_binary**: `PASS` - SepsisLabel is binary 0/1.
+- **enhanced_prob_raw_range**: `PASS` - [0, 1] 3.08861e-06 to 0.999501
+- **enhanced_oof_rows**: `PASS` - OOF row count. 1552210
+- **enhanced_unique_patients**: `PASS` - Unique Patient_ID count. 40336
+- **enhanced_time_step_prevalence**: `PASS` - Mean SepsisLabel over rows. 0.01798468
+- **enhanced_patient_prevalence**: `PASS` - Mean patient-level max SepsisLabel. 0.07268941
+- **paired_oof_alignment_rows**: `PASS` - Aligned rows equal both input OOF row counts. 1552210
+- **paired_oof_alignment_patients**: `PASS` - Unique aligned Patient_ID count. 40336
+- **paired_oof_time_step_prevalence**: `PASS` - Mean SepsisLabel over aligned rows. 0.01798468
+- **paired_oof_patient_prevalence**: `PASS` - Mean patient-level max SepsisLabel. 0.07268941
+- **no_external_validation_claimed**: `PASS` - All outputs are limited to internal cross-validation on the public PhysioNet/CinC 2019 training split.

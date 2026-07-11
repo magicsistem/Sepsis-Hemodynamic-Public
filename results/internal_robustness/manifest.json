@@ -1,0 +1,27 @@
+{
+  "created_at_utc": "2026-07-10T22:39:00.193612+00:00",
+  "analysis_scope": "internal_oof_robustness",
+  "inputs": {
+    "baseline_dir": "results/baseline",
+    "enhanced_dir": "results/enhanced",
+    "statistics_dir": "results/statistics",
+    "harmonized": "data/processed/kaggle_harmonized.csv"
+  },
+  "outputs": [
+    "ablation_inventory.csv",
+    "calibration_robustness.csv",
+    "internal_robustness_manifest.csv",
+    "internal_robustness_manifest.md",
+    "internal_robustness_summary.md",
+    "sourcewise_metrics.csv",
+    "subgroup_metrics.csv",
+    "threshold_robustness.csv",
+    "validation_checks.csv",
+    "validation_checks.md"
+  ],
+  "inventory_outputs": [
+    "internal_robustness_summary.md",
+    "internal_robustness_checklist.csv",
+    "internal_robustness_checklist.md"
+  ]
+}

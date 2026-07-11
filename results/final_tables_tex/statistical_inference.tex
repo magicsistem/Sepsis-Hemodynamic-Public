@@ -1,0 +1,21 @@
+\begin{table*}[!t]
+\centering
+\caption{Paired internal statistical inference for selected raw model comparisons.}
+\label{tab:phase10_statistical_inference}
+\scriptsize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}p{2.6cm}p{1.45cm}p{1.45cm}p{3.2cm}p{2.5cm}p{1.4cm}p{2.7cm}}
+\toprule
+\textbf{Metric / comparison} & \textbf{Baseline} & \textbf{Enhanced} & \textbf{Delta [95\% CI]} & \textbf{Test} & \textbf{BH-adjusted p} & \textbf{Interpretation} \\
+\midrule
+Raw AUROC & 0.9315 & 0.9343 & +0.0028 [0.0017, 0.0039] & Patient bootstrap, n=2000 & $<0.001$ & Significant; enhanced higher \\
+Raw AUPRC & 0.3060 & 0.3264 & +0.0204 [0.0160, 0.0247] & Patient bootstrap, n=2000 & $<0.001$ & Significant; enhanced higher \\
+Raw Brier score & 0.0701 & 0.0626 & -0.0075 [-0.0078, -0.0072] & Patient bootstrap, n=2000 & $<0.001$ & Significant; enhanced lower \\
+Raw Utility at 0.5 & 0.5015 & 0.4955 & -0.0060 [-0.0110, -0.0008] & Patient bootstrap, n=2000 & 0.075 & Not significant after BH; direction favors baseline \\
+Best raw Utility, model-specific thresholds & 0.5057 & 0.5010 & -0.0047 [-0.0095, 0.0001] & Patient bootstrap, n=2000 & 0.075 & Not significant after BH; direction favors baseline \\
+Supportive raw AUROC DeLong & 0.9315 & 0.9343 & +0.0028 & Paired DeLong & $<0.001$ & Supportive only; repeated OOF time steps \\
+\bottomrule
+\end{tabular*}
+\vspace{0.5ex}
+\footnotesize\textit{Note: Bootstrap resampling used \texttt{Patient\_ID} as the sampling unit. Confidence intervals are for enhanced-minus-baseline deltas. BH denotes Benjamini--Hochberg correction. Utility comparisons are internal threshold analyses and not external validation. Patient-level bootstrap is the primary inference procedure; DeLong is reported only as supportive because out-of-fold rows contain repeated time steps per patient.}
+\end{table*}

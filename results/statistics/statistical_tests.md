@@ -1,0 +1,11 @@
+| metric | baseline | enhanced | delta | ci_lower | ci_upper | p_value_two_sided | n_bootstrap | test | multiple_testing_group | p_value_bh | significant_bh_0.05 | p_value_display |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Delta_AUROC_raw | 0.9314974500214285 | 0.934294714682833 | 0.0027972646614045082 | 0.0016791662803316786 | 0.0038554225953305486 | 0.0005 | 2000 | paired_patient_bootstrap | main | 0.0005714285714285715 | True | p<0.001 |
+| Delta_AUPRC_raw | 0.3060453644628811 | 0.3264125134862838 | 0.020367149023402698 | 0.015956520163864986 | 0.02469688344715704 | 0.0005 | 2000 | paired_patient_bootstrap | main | 0.0005714285714285715 | True | p<0.001 |
+| Delta_Brier_raw | 0.07010657323016156 | 0.06259855678987056 | -0.007508016440291004 | -0.007788810709334429 | -0.007203254385641616 | 0.0005 | 2000 | paired_patient_bootstrap | main | 0.0005714285714285715 | True | p<0.001 |
+| Delta_Utility_raw_best | 0.5056648262039968 | 0.5010110201040191 | -0.004653806099977675 | nan | nan | nan | 0 | descriptive_summary_delta | descriptive | nan | False | NA |
+| McNemar_time_step_threshold_0.5 | 0.5 | 0.5 | 14537.0 | nan | nan | 0.0 | 0 | mcnemar_time_step_correctness;base_only=17316;enhanced_only=31853 | main | 0.0 | True | p<1e-300 |
+| McNemar_patient_threshold_0.5 | 0.5 | 0.5 | 1418.0 | nan | nan | 8.352459544373457e-141 | 0 | mcnemar_patient_correctness;base_only=918;enhanced_only=2336 | main | 3.340983817749383e-140 | True | p<0.001 |
+| McNemar_time_step_utility_optimal | 0.44999998807907104 | 0.4099999964237213 | -1627.0 | nan | nan | 1.1369399562368088e-11 | 0 | mcnemar_time_step_correctness;base_only=29507;enhanced_only=27880 | main | 2.2738799124736176e-11 | True | p<0.001 |
+| McNemar_patient_utility_optimal | 0.44999998807907104 | 0.4099999964237213 | -177.0 | nan | nan | 0.001706294488897955 | 0 | mcnemar_patient_correctness;base_only=1663;enhanced_only=1486 | main | 0.001706294488897955 | True | p=0.002 |
+| Delta_AUROC_raw_DeLong | 0.9314974500214285 | 0.934294714682833 | 0.0027972646614045082 | nan | nan | 1.8864792889184602e-22 | 0 | paired_delong;z=9.74773;variance=8.23494e-08 | main | 5.030611437115894e-22 | True | p<0.001 |

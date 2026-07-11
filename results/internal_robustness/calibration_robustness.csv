@@ -1,0 +1,7 @@
+model,method,probability_column,brier,ece,brier_change_vs_raw,ece_change_vs_raw,calibration_scope,status,reason
+baseline,raw,prob_raw,0.0701065732,0.150079403,0,0,internal_oof_only,,
+baseline,platt,prob_platt,0.0148169278,0.00287919886,-0.0552896455,-0.147200204,internal_oof_only,,
+baseline,isotonic,prob_isotonic,0.0145523122,6.96768212e-05,-0.0555542611,-0.150009726,internal_oof_only,,
+enhanced,raw,prob_raw,0.0625985568,0.130121551,0,0,internal_oof_only,,
+enhanced,platt,prob_platt,0.0146278385,0.00307818024,-0.0479707183,-0.127043371,internal_oof_only,,
+enhanced,isotonic,prob_isotonic,0.0143223472,0.000105488336,-0.0482762096,-0.130016063,internal_oof_only,,

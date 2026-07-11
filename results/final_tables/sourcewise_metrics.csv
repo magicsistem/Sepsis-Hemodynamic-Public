@@ -1,0 +1,7 @@
+group,level,model,n_patients,patient_positives,auroc_raw,auprc_raw,delta_auroc_raw,delta_auprc_raw,utility_raw_at_0.5,patient_sensitivity_at_0.5,patient_specificity_at_0.5,status
+SourceSet,A,baseline,20336.0,1790.0,0.924818274,0.305115383,,,0.533509028,0.967597765,0.4994608,OK
+SourceSet,A,enhanced,20336.0,1790.0,0.92968046,0.324993658,,,0.532384733,0.954189944,0.549498544,OK
+SourceSet,A,enhanced_minus_baseline,,,,,0.00486218632,0.0198782751,,,,OK
+SourceSet,B,baseline,20000.0,1142.0,0.937281834,0.309172749,,,0.451427343,0.925569177,0.680241807,OK
+SourceSet,B,enhanced,20000.0,1142.0,0.937772714,0.329871555,,,0.437737487,0.907180385,0.70861173,OK
+SourceSet,B,enhanced_minus_baseline,,,,,0.00049087942,0.0206988057,,,,OK

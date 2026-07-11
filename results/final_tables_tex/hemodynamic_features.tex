@@ -1,0 +1,31 @@
+\begin{table*}[!t]
+\centering
+\caption{\textbf{\textit{Post hoc hemodynamic complexity features with nonzero Gain in fold-level importance summaries. Nonzero Gain indicates use by trained fold models and is not a pretraining feature selector.}}}
+\label{tab:phase8_hemodynamic_features}
+\scriptsize
+\renewcommand{\arraystretch}{1.08}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}llllll}
+\toprule
+\textbf{Feature} & \textbf{Signal} & \textbf{Type} & \textbf{Mean gain} & \textbf{SD gain} & \textbf{Folds with nonzero gain} \\
+\midrule
+HeartRate SampEn 24h & HeartRate & SampEn & 6268.7 & 500.2 & 5 \\
+O2Sat SampEn 24h & O2Sat & SampEn & 4384.7 & 892.8 & 5 \\
+MeanBP SampEn 24h & MeanBP & SampEn & 4310.0 & 891.1 & 5 \\
+SysBP SampEn 24h & SysBP & SampEn & 3791.3 & 618.7 & 5 \\
+RespRate SampEn 24h & RespRate & SampEn & 2395.4 & 204.0 & 5 \\
+DiaBP SampEn 24h & DiaBP & SampEn & 2254.9 & 724.4 & 5 \\
+O2Sat CV 8h & O2Sat & CV & 365.3 & 86.5 & 5 \\
+SysBP CV 8h & SysBP & CV & 340.9 & 89.6 & 5 \\
+RespRate IQR 8h & RespRate & IQR & 288.1 & 96.3 & 5 \\
+MeanBP CV 8h & MeanBP & CV & 271.1 & 85.5 & 5 \\
+HeartRate CV 8h & HeartRate & CV & 268.3 & 24.1 & 5 \\
+O2Sat IQR 8h & O2Sat & IQR & 266.8 & 73.5 & 5 \\
+RespRate CV 8h & RespRate & CV & 253.8 & 22.4 & 5 \\
+DiaBP IQR 8h & DiaBP & IQR & 232.1 & 35.5 & 5 \\
+DiaBP CV 8h & DiaBP & CV & 229.5 & 27.9 & 5 \\
+HeartRate IQR 8h & HeartRate & IQR & 205.1 & 28.4 & 5 \\
+SysBP IQR 8h & SysBP & IQR & 195.9 & 42.0 & 5 \\
+MeanBP IQR 8h & MeanBP & IQR & 187.1 & 22.6 & 5 \\
+\bottomrule
+\end{tabular*}
+\end{table*}

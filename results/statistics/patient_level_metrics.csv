@@ -1,0 +1,11 @@
+model_variant,threshold_type,threshold,patient_sensitivity,patient_specificity,lead_time_median,lead_time_iqr_lower,lead_time_iqr_upper,notes
+baseline,isotonic_selected,0.0299999993294477,0.4703274215552523,0.5161480055609026,21.0,11.0,33.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+baseline,platt_selected,0.0299999993294477,0.4525920873124147,0.5801251203079885,21.0,11.0,34.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+baseline,raw_max_utility,0.449999988079071,0.4665757162346521,0.5338733825259331,21.0,11.0,33.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+baseline,raw_threshold_0.5,0.5,0.4502046384720327,0.5906052828574484,21.0,11.0,34.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+baseline,raw_selected,0.8600000143051147,0.2421555252387449,0.9293123730082344,24.0,11.0,38.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+enhanced,isotonic_selected,0.0299999993294477,0.4597544338335607,0.5432841407336114,21.0,11.0,33.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+enhanced,platt_selected,0.0199999995529651,0.4662346521145975,0.5237140412790076,21.0,11.0,33.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+enhanced,raw_max_utility,0.4099999964237213,0.4648703956343792,0.5293016789648166,21.0,11.0,33.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+enhanced,raw_threshold_0.5,0.5,0.4334924965893588,0.6297187466581115,21.0,11.0,34.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."
+enhanced,raw_selected,0.8399999737739563,0.247612551159618,0.9196342637151108,23.0,11.0,38.0,"Patient-level values are read from threshold_metrics.csv; verify patient counts are unique patients, not time steps."

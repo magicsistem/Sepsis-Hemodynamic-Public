@@ -1,0 +1,30 @@
+\begin{table}[!t]
+\centering
+\caption{\textbf{\textit{Fixed XGBoost training settings used for both baseline and enhanced models. Parameters listed as defaults were not explicitly overridden by the project training script.}}}
+\label{tab:phase10_xgb_hyperparameters}
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.08}
+\begin{tabular}{@{}p{0.40\columnwidth}p{0.54\columnwidth}@{}}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+\texttt{max\_depth} & 5 \\
+\texttt{learning\_rate} & 0.05 \\
+\texttt{n\_estimators} & 3000 \\
+\texttt{early\_stopping\_rounds} & 100 \\
+\texttt{eval\_metric} & \texttt{aucpr} \\
+\texttt{tree\_method} & \texttt{hist} \\
+\texttt{device} & \texttt{cuda} when GPU execution was available; otherwise \texttt{cpu} \\
+\texttt{random\_state} & 42 \\
+\texttt{n\_jobs} & Supplied by the SLURM run script \\
+\texttt{scale\_pos\_weight} & Fold-local negative/positive training-row ratio \\
+\texttt{subsample} & XGBoost default; not explicitly overridden \\
+\texttt{colsample\_bytree} & XGBoost default; not explicitly overridden \\
+\texttt{reg\_alpha} & XGBoost default; not explicitly overridden \\
+\texttt{reg\_lambda} & XGBoost default; not explicitly overridden \\
+\texttt{gamma} & XGBoost default; not explicitly overridden \\
+\texttt{min\_child\_weight} & XGBoost default; not explicitly overridden \\
+\bottomrule
+\end{tabular}
+\end{table}

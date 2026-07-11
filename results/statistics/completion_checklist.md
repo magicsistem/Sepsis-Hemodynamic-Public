@@ -1,0 +1,29 @@
+# statistics Completion Checklist
+
+- **baseline/enhanced final outputs verified**: `PASS` - Required result files are validated before table generation.
+- **current outputs generated with final run policy**: `PASS` - Both result directories report the current validated pipeline policy.
+- **OOF alignment verified**: `PASS` - Baseline/enhanced OOF predictions align on Patient_ID, TimeStep, and SepsisLabel.
+- **paired bootstrap AUROC/AUPRC complete**: `PASS` - Patient-level paired bootstrap implemented in statistical_tests.csv.
+- **paired bootstrap Brier complete**: `PASS` - Patient-level paired bootstrap implemented in statistical_tests.csv.
+- **AUROC/AUPRC CI complete**: `PASS` - Patient-level paired bootstrap confidence intervals are emitted for raw AUROC/AUPRC deltas.
+- **Brier/calibration metrics complete**: `PASS` - comparison_summary.csv and calibration_table.csv include raw/Platt/isotonic Brier and ECE metrics.
+- **Utility inference complete/unresolved**: `PASS` - Utility bootstrap completed after reproducing summary metrics.
+- **DeLong complete/conditional**: `CONDITIONAL` - Paired DeLong AUROC completed and validated against sklearn AUROC, but patient bootstrap remains primary because OOF rows contain repeated time steps per patient.
+- **McNemar time-step and patient-level complete**: `PASS` - statistical_tests.csv includes mcnemar_time_step_correctness and mcnemar_patient_correctness rows with p_value_display.
+- **patient confusion matrices complete**: `PASS` - patient_confusion_matrices.csv generated from patient-collapsed OOF predictions.
+- **patient-level metrics complete**: `PASS` - patient_level_metrics.csv reports selected threshold sensitivity, specificity, and lead-time fields.
+- **lead-time metrics complete**: `PASS` - Lead_time_median and IQR fields are read from threshold_metrics.csv where available.
+- **threshold operating points complete**: `PASS` - threshold_operating_points.csv selects 0.5, raw max Utility, raw max F1, and calibrated selected thresholds when available.
+- **patient subgroup table complete**: `PASS` - subgroup_patient_table.csv generated from patient-collapsed OOF metadata; SourceSet is included only if available in OOF.
+- **feature count audit complete**: `PASS` - feature_count_audit.csv generated.
+- **feature count corrected**: `PASS` - Baseline n_features=287; enhanced n_features=305; expected delta=18.
+- **SampEn features count checked**: `PASS` - feature_count_audit.csv checks expected hemodynamic complexity feature counts.
+- **calibration audit complete**: `PASS` - Training code audit confirms fold-wise OOF cross-fitting via crossfit_calibration(fold_ids): train folds fit calibration, held-out fold receives calibrated probabilities.
+- **feature importance hemodynamic audit complete**: `PASS` - feature_importance_table.csv and feature_count_audit.csv include hemodynamic checks.
+- **paper warning list generated**: `PASS` - statistics_summary.md and code/math audit include do-not-write and allowed-claims sections.
+- **reproducibility command recorded**: `PASS` - manifest.json records command, git commit, branch, input paths, seed, and n_bootstrap.
+- **no hidden test claim**: `PASS` - Warnings explicitly prohibit hidden-test claims.
+- **no external validation claim**: `PASS` - Warnings explicitly prohibit external validation claims.
+- **no direct SOTA/Zabihi hidden-test comparison claim**: `PASS` - Warnings explicitly prohibit SOTA superiority claims.
+- **ready_for_statistics_package**: `PASS` - statistics reporting package can be generated from the validated final run result directories.
+- **ready_for_methodology_review**: `CONDITIONAL` - Only conditional statistical/reporting items remain: DeLong complete/conditional
