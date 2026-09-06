@@ -153,6 +153,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("available", state)
         self.assertIn("device_count", state)
         self.assertFalse(state["available"] and state["device_count"] == 0)
+        if os.environ.get("REQUIRE_GPU") == "true":
+            self.assertTrue(state["available"], state)
 
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:

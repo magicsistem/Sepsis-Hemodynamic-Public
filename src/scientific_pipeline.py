@@ -752,11 +752,10 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
 
 
 def outer_oof(
-    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, columns_override: list[str] | None = None
+    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, gpu: dict[str, Any], columns_override: list[str] | None = None
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     merged = require_fold_context(features, folds)
     columns = columns_override or model_features(merged, variant)
-    gpu = gpu_runtime()
     records: list[pd.DataFrame] = []
     selection_rows: list[dict[str, Any]] = []
     for outer_fold in sorted(merged["Fold"].unique()):
@@ -921,17 +920,17 @@ def paired_patient_permutation(
     return rows
 
 
-def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str, test_source: str) -> dict[str, Any]:
+def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str, test_source: str, gpu: dict[str, Any]) -> dict[str, Any]:
     columns = model_features(features, variant)
     train = features[features["SourceSet"] == train_source].copy()
     test = features[features["SourceSet"] == test_source].copy()
     if train.empty or test.empty:
         raise PipelineError("SourceSet transport needs both A and B")
-    candidate, rounds, inner_oof = select_inner_model(train, columns, gpu_runtime(), 100 + (0 if train_source == "A" else 1))
+    candidate, rounds, inner_oof = select_inner_model(train, columns, gpu, 100 + (0 if train_source == "A" else 1))
     calibrator = fitted_platt(inner_oof)
     inner_oof["inner_prob_platt"] = calibrator.predict_proba(inner_oof[["inner_prob_raw"]])[:, 1]
     threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
-    model = xgb_model(candidate, SEED + 500, gpu_runtime(), rounds)
+    model = xgb_model(candidate, SEED + 500, gpu, rounds)
     model.fit(matrix(train, columns), train["SepsisLabel"], verbose=False)
     test["prob_platt"] = calibrator.predict_proba(model.predict_proba(matrix(test, columns))[:, 1].reshape(-1, 1))[:, 1]
     y = test["SepsisLabel"].to_numpy(dtype=int)
@@ -1012,6 +1011,9 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     runtime = runtime_manifest(root, run_id, sys.argv, archive)
     if runtime["git_dirty"]:
         raise PipelineError("Scientific runs require a clean committed checkout; refuse dirty provenance.")
+    gpu = runtime["gpu"]
+    if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
+        raise PipelineError("This scheduled run requires a validated GPU: {0}".format(gpu["reason"]))
     atomic_json(run_dir / "runtime_manifest.json", runtime)
     stages: dict[str, Any] = {}
     stages["harmonized"] = harmonize_archive(archive, run_dir / "harmonized.csv")
@@ -1025,7 +1027,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     summaries: dict[str, Any] = {}
     oofs: dict[str, pd.DataFrame] = {}
     for variant in ("baseline", "enhanced"):
-        oofs[variant], stages[variant] = outer_oof(features, folds, variant, run_dir)
+        oofs[variant], stages[variant] = outer_oof(features, folds, variant, run_dir, gpu)
         summaries[variant] = model_summary(oofs[variant], variant, run_dir)
     atomic_json(run_dir / "metrics.json", summaries)
     if not oofs["baseline"][["Patient_ID", "ICULOS", "SepsisLabel", "Fold"]].equals(
@@ -1035,7 +1037,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     inference = paired_patient_permutation(oofs["baseline"], oofs["enhanced"], "prob_platt")
     atomic_csv(pd.DataFrame(inference), run_dir / "inference.csv")
     transport = [
-        fit_source_transport(features, variant, train_source, test_source)
+        fit_source_transport(features, variant, train_source, test_source, gpu)
         for variant in ("baseline", "enhanced")
         for train_source, test_source in (("A", "B"), ("B", "A"))
     ]
@@ -1045,7 +1047,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "physiology_only", "without_iculos", "without_hosp_adm_time", "without_missingness",
         "without_cv", "without_iqr", "without_sampen",
     ):
-        oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, ablation_columns(features, name))
+        oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, gpu, ablation_columns(features, name))
         summary = model_summary(oof, f"ablation_{name}", run_dir)
         ablations.append({
             "ablation": name,
