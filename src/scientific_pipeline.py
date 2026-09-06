@@ -361,29 +361,28 @@ def causal_sampen(series: pd.Series, times: pd.Series) -> pd.Series:
 def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.DataFrame:
     patient = patient.sort_values("ICULOS", kind="mergesort").copy()
     times = patient["ICULOS"]
-    result = patient[["Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS"]].copy()
-    for column in STATIC_COLUMNS:
-        result[column] = patient[column]
-    result["Measurement_Count"] = patient.loc[:, DYNAMIC_COLUMNS].notna().sum(axis=1).astype("int16")
+    identity = patient[["Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS"]].copy()
+    engineered: dict[str, Any] = {column: patient[column].to_numpy() for column in STATIC_COLUMNS}
+    engineered["Measurement_Count"] = patient.loc[:, DYNAMIC_COLUMNS].notna().sum(axis=1).to_numpy(dtype="int16")
     for column in DYNAMIC_COLUMNS:
         raw = pd.to_numeric(patient[column], errors="coerce")
-        result[f"{column}_is_missing"] = raw.isna().astype("int8")
-        result[f"{column}_last_obs"] = causal_last_observation(
+        engineered[f"{column}_is_missing"] = raw.isna().to_numpy(dtype="int8")
+        engineered[f"{column}_last_obs"] = causal_last_observation(
             raw, times, FEATURE_POLICY["last_observation_max_age_hours"]
-        )
+        ).to_numpy()
     if include_hemodynamics:
         for column in HEMODYNAMIC_COLUMNS:
             raw = pd.to_numeric(patient[column], errors="coerce")
             raw.index = times.to_numpy(dtype=float)
             mean_8h = rolling_feature(raw, 8, "mean")
             std_8h = rolling_feature(raw, 8, "std")
-            result[f"{column}_cv_8h"] = (std_8h / mean_8h.abs()).replace([np.inf, -np.inf], np.nan).to_numpy()
-            result[f"{column}_iqr_8h"] = rolling_feature(raw, 8, "iqr").to_numpy()
-            result[f"{column}_shannon_5h"] = rolling_feature(raw, 5, "shannon").to_numpy()
+            engineered[f"{column}_cv_8h"] = (std_8h / mean_8h.abs()).replace([np.inf, -np.inf], np.nan).to_numpy()
+            engineered[f"{column}_iqr_8h"] = rolling_feature(raw, 8, "iqr").to_numpy()
+            engineered[f"{column}_shannon_5h"] = rolling_feature(raw, 5, "shannon").to_numpy()
             sampen = causal_sampen(raw, times)
-            result[f"{column}_sampen_24h_zero_match"] = np.isposinf(sampen).astype("int8")
-            result[f"{column}_sampen_24h"] = sampen.replace([np.inf, -np.inf], np.nan).to_numpy()
-    return result
+            engineered[f"{column}_sampen_24h_zero_match"] = np.isposinf(sampen).astype("int8")
+            engineered[f"{column}_sampen_24h"] = sampen.replace([np.inf, -np.inf], np.nan).to_numpy()
+    return pd.concat([identity, pd.DataFrame(engineered, index=patient.index)], axis=1)
 
 
 def build_features(harmonized: Path, output: Path) -> dict[str, Any]:

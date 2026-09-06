@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
 from unittest import mock
 from pathlib import Path
@@ -112,6 +113,12 @@ class ScientificPipelineTests(unittest.TestCase):
         features = pipeline.feature_patient(patient_frame(), include_hemodynamics=False)
         self.assertEqual(features["Age"].nunique(), 1)
         self.assertFalse(any(column.startswith("Age_") for column in features.columns))
+
+    def test_feature_construction_does_not_fragment_dataframe(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pd.errors.PerformanceWarning)
+            features = pipeline.feature_patient(patient_frame(), include_hemodynamics=True)
+        self.assertIn("SBP_sampen_24h", features.columns)
 
     def test_sampen_oracle_zero_match_and_no_second_backend(self):
         # Four equal observations: B=3 m-template pairs, A=1 m+1 pair.
