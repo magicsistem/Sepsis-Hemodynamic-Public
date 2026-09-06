@@ -1,3 +1,5 @@
+> **WITHDRAWN — HISTORICAL INVALID OUTPUT.** Preserved only as audit evidence; do not use for scientific claims, metrics, thresholds, validation, or reporting. Current outputs exist only in a hash-validated `runs/<run-id>/result_manifest.json`.
+
 # Statistics Summary
 
 ## Input Paths

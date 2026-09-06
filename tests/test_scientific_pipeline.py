@@ -375,6 +375,15 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("tracked, required raw-data dependency", policy)
         self.assertIn("not claimed to recreate this local repackaging", policy)
 
+    def test_historical_result_certifications_are_visibly_withdrawn(self):
+        root = Path(__file__).resolve().parents[1]
+        marker = "> **WITHDRAWN — HISTORICAL INVALID OUTPUT.**"
+        for relative in (
+            "code_math_audit_summary.md", "completion_checklist.md", "calibration_audit.md",
+            "statistical_methods_notes.md", "statistics_summary.md", "results_snippet.md",
+        ):
+            self.assertTrue((root / "results" / "statistics" / relative).read_text(encoding="utf-8").startswith(marker))
+
     def test_transitive_lineage_rejects_tampered_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

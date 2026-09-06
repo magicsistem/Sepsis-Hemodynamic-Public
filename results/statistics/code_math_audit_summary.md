@@ -1,3 +1,5 @@
+> **WITHDRAWN — HISTORICAL INVALID OUTPUT.** Preserved only as audit evidence; do not use for scientific claims, metrics, thresholds, validation, or reporting. Current outputs exist only in a hash-validated `runs/<run-id>/result_manifest.json`.
+
 # Code Math Audit Summary
 
 This generated summary accompanies the statistics tables. It is a reporting artifact only; it does not modify training, data harmonization, feature engineering, or experiment outputs.
