@@ -247,6 +247,29 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
         self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
 
+    def test_temporal_strata_and_process_ablation_definitions(self):
+        frame = pd.DataFrame({
+            "Patient_ID": ["A:p1"] * 4 + ["B:p1"] * 4,
+            "ICULOS": [1, 6, 7, 13] * 2,
+            "TrueSepsisOnset_ICULOS": [14.0] * 4 + [math.nan] * 4,
+            "SepsisLabel": [0, 0, 1, 1] + [0] * 4,
+            "probability": [0.1, 0.2, 0.8, 0.9] + [0.1, 0.2, 0.3, 0.4],
+        })
+        strata = {(row["axis"], row["stratum"]): row for row in pipeline.temporal_stratified_metrics(frame, "probability")}
+        self.assertEqual(strata[("time_since_icu_admission", "ICULOS_1_6h")]["n_rows"], 4)
+        self.assertEqual(strata[("time_relative_to_true_onset", "useful_window_onset_minus_12_to_1h")]["n_rows"], 3)
+        self.assertEqual(strata[("time_relative_to_true_onset", "post_onset_0h_plus")]["n_rows"], 0)
+
+        features = pipeline.feature_patient(patient_frame(), include_hemodynamics=True)
+        process = pipeline.ablation_columns(features, "without_explicit_process")
+        physiology = pipeline.ablation_columns(features, "physiology_measurements_only")
+        for columns in (process, physiology):
+            self.assertFalse(any(column.endswith("_is_missing") for column in columns))
+            self.assertTrue({"Unit1", "Unit2", "HospAdmTime", "ICULOS", "Measurement_Count"}.isdisjoint(columns))
+            self.assertIn("HR_last_obs", columns)
+        self.assertTrue({"Age", "Gender"}.issubset(process))
+        self.assertTrue({"Age", "Gender"}.isdisjoint(physiology))
+
     def test_python_hash_seed_is_exported_before_python_starts(self):
         root = Path(__file__).resolve().parents[1]
         entrypoint = (root / "run.sh").read_text(encoding="utf-8")

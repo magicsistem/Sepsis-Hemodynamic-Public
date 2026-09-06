@@ -786,6 +786,41 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     }
 
 
+def temporal_stratified_metrics(frame: pd.DataFrame, probability_column: str) -> list[dict[str, Any]]:
+    times = frame["ICULOS"].to_numpy(dtype=float)
+    onset = frame["TrueSepsisOnset_ICULOS"].to_numpy(dtype=float)
+    relative = times - onset
+    strata = (
+        ("time_since_icu_admission", "ICULOS_1_6h", (times >= 1) & (times <= 6)),
+        ("time_since_icu_admission", "ICULOS_7_12h", (times >= 7) & (times <= 12)),
+        ("time_since_icu_admission", "ICULOS_13_24h", (times >= 13) & (times <= 24)),
+        ("time_since_icu_admission", "ICULOS_25_48h", (times >= 25) & (times <= 48)),
+        ("time_since_icu_admission", "ICULOS_49h_plus", times >= 49),
+        ("time_relative_to_true_onset", "remote_pre_onset_before_12h", relative < -12),
+        ("time_relative_to_true_onset", "useful_window_onset_minus_12_to_1h", (relative >= -12) & (relative <= -1)),
+        ("time_relative_to_true_onset", "post_onset_0h_plus", relative >= 0),
+    )
+    rows: list[dict[str, Any]] = []
+    for axis, stratum, mask in strata:
+        subset = frame.loc[mask]
+        y = subset["SepsisLabel"].to_numpy(dtype=int)
+        probability = subset[probability_column].to_numpy(dtype=float)
+        both_classes = set(y) == {0, 1}
+        rows.append({
+            "axis": axis,
+            "stratum": stratum,
+            "estimand": "descriptive row-time performance; patient dependence retained, no independent-row inference",
+            "n_rows": int(len(subset)),
+            "n_patients": int(subset["Patient_ID"].nunique()),
+            "n_positive_rows": int(y.sum()),
+            "positive_prevalence": float(y.mean()) if len(y) else math.nan,
+            "auroc": float(roc_auc_score(y, probability)) if both_classes else math.nan,
+            "average_precision": float(average_precision_score(y, probability)) if both_classes else math.nan,
+            "brier": float(brier_score_loss(y, probability)) if len(y) else math.nan,
+        })
+    return rows
+
+
 def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Iterable[float]) -> list[dict[str, Any]]:
     """Patient-level DCA for assessment after any alert before true onset."""
     rows: list[dict[str, Any]] = []
@@ -916,6 +951,14 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
     }
     early = early_warning_metrics(oof, "prob_platt", "nested_threshold")
     metrics["early_warning"] = early["summary"]
+    if variant in {"baseline", "enhanced"}:
+        temporal_path = output_dir / f"{variant}_temporal_strata.csv"
+        atomic_csv(pd.DataFrame(temporal_stratified_metrics(oof, "prob_platt")), temporal_path)
+        metrics["temporal_strata"] = {
+            "artifact": temporal_path.name,
+            "probability_kind": "platt_nested",
+            "unit": "descriptive row-time strata; no independent-row inference",
+        }
     metrics_path = output_dir / f"{variant}_metrics.json"
     atomic_json(metrics_path, metrics)
     atomic_csv(pd.DataFrame(early["patients"]), output_dir / f"{variant}_early_warning_patients.csv")
@@ -1030,11 +1073,15 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
 
 def ablation_columns(frame: pd.DataFrame, name: str) -> list[str]:
     columns = model_features(frame, "enhanced")
+    explicit_process = tuple(column for column in columns if column.endswith("_is_missing")) + (
+        "Unit1", "Unit2", "HospAdmTime", "ICULOS", "Measurement_Count",
+    )
     removals = {
-        "physiology_only": tuple(STATIC_COLUMNS) + ("ICULOS", "Measurement_Count"),
+        "physiology_measurements_only": explicit_process + ("Age", "Gender"),
+        "without_explicit_process": explicit_process,
         "without_iculos": ("ICULOS",),
         "without_hosp_adm_time": ("HospAdmTime",),
-        "without_missingness": tuple(column for column in columns if column.endswith("_is_missing")) + ("Measurement_Count",),
+        "without_explicit_missingness_indicators": tuple(column for column in columns if column.endswith("_is_missing")) + ("Measurement_Count",),
         "without_cv": tuple(column for column in columns if "_cv_" in column),
         "without_iqr": tuple(column for column in columns if "_iqr_" in column),
         "without_sampen": tuple(column for column in columns if "_sampen_" in column),
@@ -1072,6 +1119,9 @@ def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
             errors.append(relative)
     if errors:
         raise PipelineError(f"Result manifest hash validation failed: {errors}")
+    for required_output in ("baseline_temporal_strata.csv", "enhanced_temporal_strata.csv"):
+        if not (run_dir / required_output).is_file():
+            raise PipelineError(f"Required temporal-stratification artifact is missing: {required_output}")
     stability = pd.read_csv(run_dir / "split_stability.csv")
     required_stability = {"split_seed", "model_variant", "fold_artifact", "fold_sha256", "auroc", "average_precision"}
     if len(stability) != 2 * len(FEATURE_POLICY["split_stability_seeds"]) or set(stability["split_seed"]) != set(FEATURE_POLICY["split_stability_seeds"]) or not required_stability.issubset(stability.columns):
@@ -1143,14 +1193,20 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     ]
     atomic_csv(pd.DataFrame(transport), run_dir / "transport.csv")
     ablations = []
+    ablation_definitions = {
+        "physiology_measurements_only": "Age, sex, time, unit and explicit process/missingness features removed; native NaN states remain observable",
+        "without_explicit_process": "unit, admission/ICU time and explicit measurement-process indicators removed; native NaN states remain observable",
+        "without_explicit_missingness_indicators": "missingness flags and measurement count removed; native NaN states remain observable",
+    }
     for name in (
-        "physiology_only", "without_iculos", "without_hosp_adm_time", "without_missingness",
+        "physiology_measurements_only", "without_explicit_process", "without_iculos", "without_hosp_adm_time", "without_explicit_missingness_indicators",
         "without_cv", "without_iqr", "without_sampen",
     ):
         oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, gpu, ablation_columns(features, name))
         summary = model_summary(oof, f"ablation_{name}", run_dir)
         ablations.append({
             "ablation": name,
+            "definition": ablation_definitions.get(name, f"pre-specified removal: {name}"),
             "feature_count": detail["feature_count"],
             "average_precision_platt": summary["platt_nested"]["average_precision"],
             "auroc_platt": summary["platt_nested"]["auroc"],
