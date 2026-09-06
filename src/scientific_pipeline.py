@@ -834,6 +834,24 @@ def paired_early_warning_comparison(baseline: pd.DataFrame, enhanced: pd.DataFra
     }
 
 
+def cohort_flow_summary(features: pd.DataFrame, harmonized_stage: dict[str, Any]) -> dict[str, Any]:
+    patients = features.groupby("Patient_ID", sort=True).agg(SourceSet=("SourceSet", "first"), septic=("SepsisLabel", "max"))
+    if len(features) != harmonized_stage["row_count"] or len(patients) != harmonized_stage["patient_count"]:
+        raise PipelineError("Cohort flow does not match harmonized provenance")
+    sources = {}
+    for source, group in features.groupby("SourceSet", sort=True):
+        source_patients = patients[patients["SourceSet"] == source]
+        sources[source] = {"rows": int(len(group)), "patients": int(len(source_patients)), "septic_patients": int(source_patients["septic"].sum())}
+    return {
+        "population": "complete validated public PhysioNet/CinC 2019 training cohorts A and B",
+        "available_patients": int(len(patients)), "included_patients": int(len(patients)), "excluded_patients": 0,
+        "rows": int(len(features)), "septic_patients": int(patients["septic"].sum()),
+        "nonseptic_patients": int((patients["septic"] == 0).sum()), "source_sets": sources,
+        "calendar_period_available": False, "hospital_identity_beyond_SourceSet_available": False,
+        "exclusion_policy": "fail-closed schema/provenance validation; no post-validation patient exclusion",
+    }
+
+
 def measurement_support_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     times = frame["ICULOS"]
@@ -1345,6 +1363,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     stages["folds"] = write_folds(pd.read_csv(run_dir / "features.csv"), run_dir / "folds.csv")
     atomic_json(run_dir / "folds_manifest.json", stages["folds"])
     features = pd.read_csv(run_dir / "features.csv")
+    atomic_json(run_dir / "cohort_flow.json", cohort_flow_summary(features, stages["harmonized"]))
     atomic_csv(pd.DataFrame(measurement_support_rows(features)), run_dir / "measurement_support.csv")
     stages["measurement_support"] = {"artifact": "measurement_support.csv", "artifact_sha256": sha256_file(run_dir / "measurement_support.csv"), "input_sha256": stages["features"]["artifact_sha256"]}
     folds = pd.read_csv(run_dir / "folds.csv")
@@ -1441,6 +1460,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     raw_node = node(raw_artifact, {}, "external_input", ("physionet_cinc_2019_local_repackaging",))
     harmonized_node = node("harmonized.csv", {raw_artifact: raw_node["sha256"]}, "src.scientific_pipeline:harmonize_archive", ("official_40_predictor_schema_v1", "challenge_shifted_persistent_label"))
     features_node = node("features.csv", {"harmonized.csv": harmonized_node["sha256"]}, "src.scientific_pipeline:build_features", ("causal_feature_policy_v1",))
+    cohort_node = node("cohort_flow.json", {"harmonized.csv": harmonized_node["sha256"], "features.csv": features_node["sha256"]}, "src.scientific_pipeline:cohort_flow_summary", ("complete_public_AB_cohort_flow_v1",))
     support_node = node("measurement_support.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:measurement_support_rows", ("observed_sampen_effective_n_24h_v1",))
     folds_node = node("folds.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds", ("stratified_group_kfold_patient_v1",))
     model_nodes = {
@@ -1480,6 +1500,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "raw_data": raw_node,
         "harmonized": harmonized_node,
         "features": features_node,
+        "cohort_flow": cohort_node,
         "measurement_support": support_node,
         "folds": folds_node,
         "models_oof_calibration": model_nodes,

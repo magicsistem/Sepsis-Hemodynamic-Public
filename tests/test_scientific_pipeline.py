@@ -98,6 +98,17 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(first["seed"], pipeline.SEED)
         self.assertEqual(second["seed"], pipeline.SEED + 101)
 
+    def test_cohort_flow_is_current_run_data_driven(self):
+        features = pd.DataFrame({
+            "Patient_ID": ["A:p1", "A:p1", "B:p1"], "SourceSet": ["A", "A", "B"], "SepsisLabel": [0, 1, 0],
+        })
+        flow = pipeline.cohort_flow_summary(features, {"row_count": 3, "patient_count": 2})
+        self.assertEqual((flow["available_patients"], flow["included_patients"], flow["excluded_patients"]), (2, 2, 0))
+        self.assertEqual((flow["septic_patients"], flow["nonseptic_patients"]), (1, 1))
+        self.assertEqual(flow["source_sets"]["A"]["rows"], 2)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.cohort_flow_summary(features, {"row_count": 4, "patient_count": 2})
+
     def test_source_provenance_hash_validation_is_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
