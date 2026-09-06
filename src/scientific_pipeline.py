@@ -158,6 +158,7 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
     utility_hash = sha256_file(utility_path)
     if utility_hash != OFFICIAL_UTILITY_SHA256:
         raise PipelineError("The vendored official Utility scorer hash does not match its pinned source.")
+    gpu = gpu_runtime()
     return {
         "timestamp_utc": utc_now(),
         "hostname": platform.node(),
@@ -175,7 +176,8 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
         "seed": SEED,
         "pythonhashseed": os.environ.get("PYTHONHASHSEED", "unset"),
         "dependencies": dependency_versions(),
-        "gpu": gpu_runtime(),
+        "gpu": gpu,
+        "xgboost_backend": xgb_backend(gpu),
         "official_utility": {
             "source": "physionetchallenges/evaluation-2019@467c49b514542be7a4a0bafe40fa2c3b064dda2e",
             "sha256": utility_hash,
@@ -470,6 +472,15 @@ def matrix(frame: pd.DataFrame, columns: list[str]) -> np.ndarray:
     return values
 
 
+def xgb_backend(gpu: dict[str, Any]) -> dict[str, str]:
+    import xgboost as xgb
+
+    major = int(xgb.__version__.split(".", 1)[0])
+    if not gpu["available"]:
+        return {"tree_method": "hist"}
+    return {"tree_method": "hist", "device": "cuda"} if major >= 2 else {"tree_method": "gpu_hist", "predictor": "gpu_predictor"}
+
+
 def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimators: int, early_stopping: bool = False):
     import xgboost as xgb
 
@@ -484,8 +495,7 @@ def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimato
         "eval_metric": "logloss",  # XGBoost aucpr is not sklearn Average Precision.
         "random_state": int(seed),
         "n_jobs": 8,
-        "tree_method": "hist",
-        "device": "cuda" if gpu["available"] else "cpu",
+        **xgb_backend(gpu),
     }
     if early_stopping:
         kwargs["early_stopping_rounds"] = 30

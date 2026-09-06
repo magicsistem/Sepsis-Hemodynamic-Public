@@ -155,7 +155,9 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertFalse(state["available"] and state["device_count"] == 0)
         if os.environ.get("REQUIRE_GPU") == "true":
             self.assertTrue(state["available"], state)
+            backend = pipeline.xgb_backend(state)
             model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, state, n_estimators=2)
+            self.assertEqual(model.get_xgb_params()["tree_method"], backend["tree_method"])
             model.fit(np.array([[0.0], [1.0], [0.0], [1.0]]), np.array([0, 1, 0, 1]), verbose=False)
             self.assertEqual(len(model.predict_proba(np.array([[0.0], [1.0]]))), 2)
 
