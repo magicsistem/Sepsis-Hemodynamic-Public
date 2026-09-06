@@ -14,3 +14,9 @@ nested selection records, metrics, reliability rows, patient event/alarm rows,
 DCA, SourceSet transport, ablations, inference, and the manifest chain.
 Missing or hash-mismatched artifacts cause validation failure, not a partial
 statistics package.
+
+`data/raw/archive.zip` is the tracked, required raw-data dependency for this
+workflow. Its exact-byte reproduction path is that tracked file plus the
+SHA-256 recorded by the run. The official PhysioNet source can provide the
+underlying records, but it is not claimed to recreate this local repackaging
+byte-for-byte.

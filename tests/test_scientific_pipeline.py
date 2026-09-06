@@ -39,6 +39,9 @@ def patient_frame(hours=(1, 2, 3, 4), labels=(0, 0, 0, 0)) -> pd.DataFrame:
 
 class ScientificPipelineTests(unittest.TestCase):
     def test_official_schema_hct_alias_and_unknown_rejection(self):
+        self.assertEqual(len(pipeline.PREDICTOR_COLUMNS), 40)
+        self.assertTrue({"Hct", "ICULOS"}.issubset(pipeline.PREDICTOR_COLUMNS))
+        self.assertTrue({"ALT", "PT", "INR"}.isdisjoint(pipeline.CHALLENGE_COLUMNS))
         headers = list(pipeline.CHALLENGE_COLUMNS)
         headers[headers.index("Hct")] = "HCT"
         self.assertIn("Hct", pipeline.canonical_headers(headers, "p000001.psv"))
@@ -363,10 +366,14 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertNotIn("Fold", inner.columns)  # Outer held-out rows cannot calibrate themselves.
 
     def test_data_license_notice_distinguishes_local_repackaging(self):
-        notice = (Path(__file__).resolve().parents[1] / "docs" / "data_license.md").read_text(encoding="utf-8")
+        root = Path(__file__).resolve().parents[1]
+        notice = (root / "docs" / "data_license.md").read_text(encoding="utf-8")
         self.assertIn("CC BY 4.0", notice)
         self.assertIn("official PhysioNet archive", notice)
         self.assertIn("repackaging", notice)
+        policy = (root / "docs" / "results_policy.md").read_text(encoding="utf-8")
+        self.assertIn("tracked, required raw-data dependency", policy)
+        self.assertIn("not claimed to recreate this local repackaging", policy)
 
     def test_reporting_traceability_and_fail_closed_source_set(self):
         with self.assertRaises(pipeline.PipelineError):
