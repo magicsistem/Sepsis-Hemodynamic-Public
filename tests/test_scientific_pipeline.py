@@ -337,6 +337,7 @@ class ScientificPipelineTests(unittest.TestCase):
         job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
         self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
         self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
+        self.assertIn("RESUME_RUN_ID", entrypoint)
         self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
         self.assertIn("logs/run_ledger.tsv", job)
@@ -443,6 +444,24 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual([row["model_variant"] for row in rows], ["baseline", "enhanced"])
         self.assertEqual(rows[0]["split_hash"], rows[1]["split_hash"])
         self.assertTrue(all(row["classifier"] == "sklearn_SGDClassifier_log_loss_l2" for row in rows))
+
+    def test_stage_checkpoint_resume_is_hash_and_context_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+            def producer(output):
+                calls.append(1)
+                output.write_text("valid\n", encoding="utf-8")
+                return {"stage": "features", "artifact_sha256": pipeline.sha256_file(output), "input_sha256": "a" * 64}
+            first = pipeline.stage_checkpoint(root, "features", producer, {"input_sha256": "a" * 64})
+            second = pipeline.stage_checkpoint(root, "features", producer, {"input_sha256": "a" * 64})
+            self.assertEqual((first, len(calls)), (second, 1))
+            (root / "features.csv").write_text("tampered\n", encoding="utf-8")
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.stage_checkpoint(root, "features", producer, {"input_sha256": "a" * 64})
+            (root / "baseline_oof_predictions.csv").write_text("partial\n", encoding="utf-8")
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.require_clean_resume_boundary(root)
 
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1343,25 +1343,62 @@ def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
     return {"status": "PASS", "validated_at_utc": utc_now(), "manifest": str(manifest_path)}
 
 
+def stage_checkpoint(run_dir: Path, name: str, producer: Any, expected: dict[str, Any]) -> dict[str, Any]:
+    artifact = run_dir / f"{name}.csv"
+    manifest_path = run_dir / f"{name}_manifest.json"
+    if artifact.exists() != manifest_path.exists():
+        raise PipelineError(f"Incomplete {name} checkpoint; preserve evidence and remove only this invalid partial before resuming")
+    if artifact.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("stage") != name or manifest.get("artifact_sha256") != sha256_file(artifact) or any(manifest.get(key) != value for key, value in expected.items()):
+            raise PipelineError(f"Stale or mismatched {name} checkpoint")
+        return manifest
+    manifest = producer(artifact)
+    if any(manifest.get(key) != value for key, value in expected.items()):
+        raise PipelineError(f"New {name} checkpoint has unexpected provenance")
+    atomic_json(manifest_path, manifest)
+    return manifest
+
+
+def require_clean_resume_boundary(run_dir: Path) -> None:
+    reusable = {"runtime_manifest.json", *(f"{name}{suffix}" for name in ("harmonized", "features", "folds") for suffix in (".csv", "_manifest.json"))}
+    downstream = sorted(path.name for path in run_dir.iterdir() if path.name not in reusable)
+    if downstream:
+        raise PipelineError(f"Resume would overwrite downstream partials; preserve logs/evidence and remove only invalid partials first: {downstream}")
+
+
 def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: str) -> dict[str, Any]:
     require_python_hash_seed()
-    if run_dir.exists():
+    resume = os.environ.get("RESUME_EXISTING", "false").lower() == "true"
+    if run_dir.exists() and not resume:
         raise PipelineError(f"Run directory already exists; refusing to overwrite evidence: {run_dir}")
-    run_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True, exist_ok=resume)
     runtime = runtime_manifest(root, run_id, sys.argv, archive)
+    existing_runtime = run_dir / "runtime_manifest.json"
+    if resume and existing_runtime.is_file():
+        previous = json.loads(existing_runtime.read_text(encoding="utf-8"))
+        keys = ("run_id", "git_commit", "data_archive_sha256", "feature_policy_hash")
+        if any(previous.get(key) != runtime.get(key) for key in keys):
+            raise PipelineError("Resume runtime provenance does not match the existing run")
+        runtime = previous
+    elif resume and any(run_dir.iterdir()):
+        raise PipelineError("Resume directory lacks its runtime provenance checkpoint")
     if runtime["git_dirty"]:
         raise PipelineError("Scientific runs require a clean committed checkout; refuse dirty provenance.")
     gpu = runtime["gpu"]
     if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
         raise PipelineError("This scheduled run requires a validated GPU: {0}".format(gpu["reason"]))
     atomic_json(run_dir / "runtime_manifest.json", runtime)
+    if resume and (run_dir / "result_manifest.json").is_file():
+        return validate_final_manifest(run_dir)
     stages: dict[str, Any] = {}
-    stages["harmonized"] = harmonize_archive(archive, run_dir / "harmonized.csv")
-    atomic_json(run_dir / "harmonized_manifest.json", stages["harmonized"])
-    stages["features"] = build_features(run_dir / "harmonized.csv", run_dir / "features.csv")
-    atomic_json(run_dir / "features_manifest.json", stages["features"])
-    stages["folds"] = write_folds(pd.read_csv(run_dir / "features.csv"), run_dir / "folds.csv")
-    atomic_json(run_dir / "folds_manifest.json", stages["folds"])
+    stages["harmonized"] = stage_checkpoint(run_dir, "harmonized", lambda output: harmonize_archive(archive, output), {"archive_sha256": runtime["data_archive_sha256"]})
+    stages["features"] = stage_checkpoint(run_dir, "features", lambda output: build_features(run_dir / "harmonized.csv", output), {"input_sha256": stages["harmonized"]["artifact_sha256"]})
+    feature_frame = pd.read_csv(run_dir / "features.csv")
+    patient_hash = stable_hash(feature_frame.groupby("Patient_ID", sort=True)["SepsisLabel"].max().astype(int).reset_index().to_dict("records"))
+    stages["folds"] = stage_checkpoint(run_dir, "folds", lambda output: write_folds(feature_frame, output), {"patient_inventory_hash": patient_hash, "seed": SEED})
+    if resume:
+        require_clean_resume_boundary(run_dir)
     features = pd.read_csv(run_dir / "features.csv")
     atomic_json(run_dir / "cohort_flow.json", cohort_flow_summary(features, stages["harmonized"]))
     atomic_csv(pd.DataFrame(measurement_support_rows(features)), run_dir / "measurement_support.csv")

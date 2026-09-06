@@ -51,9 +51,17 @@ export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY
 command -v sbatch >/dev/null || { echo "FAIL: sbatch is required; invoke on CEDIA" >&2; exit 1; }
 [[ -f data/raw/archive.zip ]] || { echo "FAIL: data/raw/archive.zip is missing" >&2; exit 1; }
 
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_GIT_COMMIT:0:7}}"
-RUN_DIR="$ROOT/runs/$RUN_ID"
-[[ ! -e "$RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $RUN_DIR" >&2; exit 1; }
+if [[ -n "${RESUME_RUN_ID:-}" ]]; then
+    RUN_ID="$RESUME_RUN_ID"
+    RUN_DIR="$ROOT/runs/$RUN_ID"
+    [[ -d "$RUN_DIR" ]] || { echo "FAIL: resume run directory not found: $RUN_DIR" >&2; exit 1; }
+    export RESUME_EXISTING=true
+else
+    RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_GIT_COMMIT:0:7}}"
+    RUN_DIR="$ROOT/runs/$RUN_ID"
+    [[ ! -e "$RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $RUN_DIR" >&2; exit 1; }
+    export RESUME_EXISTING=false
+fi
 mkdir -p runs logs
 JOB_ID=$(sbatch --parsable --export=ALL,PROJECT_DIR="$ROOT",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_TESTS_ONLY="$TESTS_ONLY" jobs/run_experiment.slurm)
 printf 'Submitted scientific run %s (Slurm job %s)\n' "$RUN_ID" "$JOB_ID"
