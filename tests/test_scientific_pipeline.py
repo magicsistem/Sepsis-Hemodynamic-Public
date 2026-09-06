@@ -256,7 +256,10 @@ class ScientificPipelineTests(unittest.TestCase):
             "InnerFold": [0] * 4 + [1] * 4,
         })
         calibrator = pipeline.fitted_platt(inner)
-        inner["inner_prob_platt"] = calibrator.predict_proba(inner[["inner_prob_raw"]])[:, 1]
+        inner["inner_prob_platt"] = pipeline.platt_probabilities(calibrator, inner["inner_prob_raw"])
+        held_out = pd.DataFrame({"prob_raw": [0.15, 0.85]})
+        held_out["prob_platt"] = pipeline.platt_probabilities(calibrator, held_out["prob_raw"])
+        self.assertTrue(np.isfinite(held_out["prob_platt"]).all())
         threshold = pipeline.threshold_from_inner_oof(inner, "inner_prob_platt")
         self.assertIn(threshold, pipeline.FEATURE_POLICY["threshold_grid"])
         self.assertNotIn("Fold", inner.columns)  # Outer held-out rows cannot calibrate themselves.

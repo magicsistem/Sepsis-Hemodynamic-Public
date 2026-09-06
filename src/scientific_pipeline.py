@@ -562,8 +562,13 @@ def fitted_platt(inner_oof: pd.DataFrame) -> LogisticRegression:
     if set(y) != {0, 1}:
         raise PipelineError("Nested calibration requires both classes in inner OOF predictions")
     calibrator = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED)
-    calibrator.fit(inner_oof[["inner_prob_raw"]], y)
+    calibrator.fit(inner_oof["inner_prob_raw"].to_numpy(dtype=float).reshape(-1, 1), y)
     return calibrator
+
+
+def platt_probabilities(calibrator: LogisticRegression, probability: Any) -> np.ndarray:
+    """Apply the one-dimensional nested calibrator without DataFrame-name coupling."""
+    return calibrator.predict_proba(np.asarray(probability, dtype=float).reshape(-1, 1))[:, 1]
 
 
 def threshold_from_inner_oof(inner_oof: pd.DataFrame, probability_column: str) -> float:
@@ -791,12 +796,12 @@ def outer_oof(
             raise PipelineError("Outer-fold patient overlap")
         candidate, selected_rounds, inner_oof = select_inner_model(outer_train, columns, gpu, int(outer_fold))
         calibrator = fitted_platt(inner_oof)
-        inner_oof["inner_prob_platt"] = calibrator.predict_proba(inner_oof[["inner_prob_raw"]])[:, 1]
+        inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
         threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
         model = xgb_model(candidate, SEED + int(outer_fold), gpu, selected_rounds)
         model.fit(matrix(outer_train, columns), outer_train["SepsisLabel"], verbose=False)
         outer_test["prob_raw"] = model.predict_proba(matrix(outer_test, columns))[:, 1]
-        outer_test["prob_platt"] = calibrator.predict_proba(outer_test[["prob_raw"]])[:, 1]
+        outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
         outer_test["nested_threshold"] = threshold
         outer_test["model_variant"] = variant
         records.append(outer_test)
@@ -952,11 +957,11 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
         raise PipelineError("SourceSet transport needs both A and B")
     candidate, rounds, inner_oof = select_inner_model(train, columns, gpu, 100 + (0 if train_source == "A" else 1))
     calibrator = fitted_platt(inner_oof)
-    inner_oof["inner_prob_platt"] = calibrator.predict_proba(inner_oof[["inner_prob_raw"]])[:, 1]
+    inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
     threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
     model = xgb_model(candidate, SEED + 500, gpu, rounds)
     model.fit(matrix(train, columns), train["SepsisLabel"], verbose=False)
-    test["prob_platt"] = calibrator.predict_proba(model.predict_proba(matrix(test, columns))[:, 1].reshape(-1, 1))[:, 1]
+    test["prob_platt"] = platt_probabilities(calibrator, model.predict_proba(matrix(test, columns))[:, 1])
     y = test["SepsisLabel"].to_numpy(dtype=int)
     return {
         "experiment": f"train_{train_source}_test_{test_source}",
