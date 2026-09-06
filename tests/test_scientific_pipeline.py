@@ -268,7 +268,7 @@ class ScientificPipelineTests(unittest.TestCase):
             for hour, (label, probability) in enumerate(zip(labels, probabilities), start=1):
                 rows.append({
                     "Patient_ID": f"A:p{patient:03d}", "ICULOS": hour,
-                    "SepsisLabel": label, "TrueSepsisOnset_ICULOS": 9.0 if septic else math.nan,
+                    "SepsisLabel": label, "TrueSepsisOnset_ICULOS": 4.0 if septic else math.nan,
                     "prob_raw": probability, "prob_platt": probability, "nested_threshold": 0.5,
                 })
         oof = pd.DataFrame(rows)
@@ -279,6 +279,10 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
         self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
         self.assertAlmostEqual(summary["prevalence_only_brier_reference"], np.mean(oof["SepsisLabel"]) * (1 - np.mean(oof["SepsisLabel"])))
+        composition = summary["positive_label_composition"]
+        self.assertEqual((composition["pre_onset_rows"], composition["onset_or_post_onset_rows"]), (20, 20))
+        self.assertEqual(composition["pre_onset_rows"] + composition["onset_or_post_onset_rows"], summary["n_positive_rows"])
+        self.assertIn("not equivalent", composition["interpretation"])
         self.assertIn("fold-specific monotone calibrators", summary["platt_nested"]["discrimination_interpretation"])
         self.assertIn("not a threshold for a final deployable model", summary["operating_policy_interpretation"])
 

@@ -1022,6 +1022,10 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
     calibrated = oof["prob_platt"].to_numpy(dtype=float)
     raw_calibration = calibration_metrics_with_patient_uncertainty(oof, "prob_raw")
     platt_calibration = calibration_metrics_with_patient_uncertainty(oof, "prob_platt")
+    onset = oof["TrueSepsisOnset_ICULOS"].to_numpy(dtype=float)
+    positive = y == 1
+    positive_pre_onset = positive & np.isfinite(onset) & (oof["ICULOS"].to_numpy(dtype=float) < onset)
+    positive_onset_or_post = positive & np.isfinite(onset) & ~positive_pre_onset
     metrics = {
         "model_variant": variant,
         "population": "outer-fold held-out rows; patient grouping is retained for inference",
@@ -1030,6 +1034,12 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
         "n_rows": int(len(oof)),
         "n_patients": int(oof["Patient_ID"].nunique()),
         "n_positive_rows": int(y.sum()),
+        "positive_label_composition": {
+            "pre_onset_rows": int(positive_pre_onset.sum()),
+            "onset_or_post_onset_rows": int(positive_onset_or_post.sum()),
+            "onset_or_post_onset_fraction": float(positive_onset_or_post.sum() / positive.sum()) if positive.sum() else math.nan,
+            "interpretation": "Challenge-positive rows are not equivalent to fixed-horizon early warnings.",
+        },
         "prevalence_only_brier_reference": float(y.mean() * (1 - y.mean())),
         "raw": {**discrimination_metrics(y, raw), **raw_calibration},
         "platt_nested": {
