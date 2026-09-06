@@ -131,7 +131,7 @@ def dependency_versions() -> dict[str, str]:
 
 def gpu_runtime() -> dict[str, Any]:
     """Return usable GPU state; importing CuPy alone is never evidence of a GPU."""
-    state: dict[str, Any] = {"available": False, "reason": "CuPy unavailable", "device_count": 0, "gpu_model": None, "cuda_runtime_version": None, "cuda_driver_version": None}
+    state: dict[str, Any] = {"available": False, "reason": "CuPy unavailable", "device_count": 0, "n_gpus_used": 0, "device_backend": "cpu", "gpu_model": None, "cuda_runtime_version": None, "cuda_driver_version": None}
     try:
         import cupy as cp
     except Exception as exc:
@@ -149,7 +149,7 @@ def gpu_runtime() -> dict[str, Any]:
             return state
         properties = cp.cuda.runtime.getDeviceProperties(0)
         name = properties.get("name", b"unknown")
-        state.update({"available": True, "reason": "validated", "gpu_model": name.decode() if isinstance(name, bytes) else str(name)})
+        state.update({"available": True, "reason": "validated", "n_gpus_used": 1, "device_backend": "cuda", "gpu_model": name.decode() if isinstance(name, bytes) else str(name)})
         return state
     except Exception as exc:
         state["reason"] = f"CUDA runtime validation failed: {type(exc).__name__}: {exc}"

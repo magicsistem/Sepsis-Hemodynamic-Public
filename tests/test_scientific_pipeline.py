@@ -333,6 +333,7 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertFalse(state["available"] and state["device_count"] == 0)
         if os.environ.get("REQUIRE_GPU") == "true":
             self.assertTrue(state["available"], state)
+            self.assertEqual((state["n_gpus_used"], state["device_backend"]), (1, "cuda"))
             backend = pipeline.xgb_backend(state)
             model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, state, n_estimators=2)
             self.assertEqual(model.get_xgb_params()["tree_method"], backend["tree_method"])
@@ -354,6 +355,16 @@ class ScientificPipelineTests(unittest.TestCase):
             state = pipeline.gpu_runtime()
         self.assertFalse(state["available"])
         self.assertEqual(state["device_count"], 0)
+        self.assertEqual(state["n_gpus_used"], 0)
+        self.assertEqual(state["device_backend"], "cpu")
+
+    def test_removed_historical_duplicate_and_selection_paths(self):
+        features = pipeline.feature_patient(patient_frame(), include_hemodynamics=True)
+        columns = pipeline.model_features(features, "enhanced")
+        self.assertNotIn("HR", columns)
+        self.assertIn("HR_last_obs", columns)
+        self.assertNotIn("best_method", inspect.getsource(pipeline.model_summary))
+        self.assertNotIn("quantile", inspect.getsource(pipeline.calibration_metrics))
 
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
