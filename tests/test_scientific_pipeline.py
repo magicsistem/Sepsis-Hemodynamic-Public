@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -113,6 +115,13 @@ class ScientificPipelineTests(unittest.TestCase):
         predictions = np.array([0, 0, 1, 1, 1, 1])
         self.assertAlmostEqual(official.compute_prediction_utility(labels, predictions), 3.388888888888889)
         shifted = np.array([0] * 12 + [1] * 12)
+        optimal = np.arange(24) == 12
+        early = np.arange(24) == 9
+        late = np.arange(24) == 18
+        missed = np.zeros(24, dtype=int)
+        self.assertGreater(official.compute_prediction_utility(shifted, optimal), official.compute_prediction_utility(shifted, early))
+        self.assertGreater(official.compute_prediction_utility(shifted, early), official.compute_prediction_utility(shifted, late))
+        self.assertLess(official.compute_prediction_utility(shifted, missed), 0.0)
         times = np.arange(1, 25)
         frame = pd.DataFrame({"Patient_ID": "A:p000001", "ICULOS": times, "SepsisLabel": shifted})
         frame["zero"] = 0.0
@@ -172,6 +181,21 @@ class ScientificPipelineTests(unittest.TestCase):
             self.assertEqual(model.get_xgb_params()["tree_method"], backend["tree_method"])
             model.fit(np.array([[0.0], [1.0], [0.0], [1.0]]), np.array([0, 1, 0, 1]), verbose=False)
             self.assertEqual(len(model.predict_proba(np.array([[0.0], [1.0]]))), 2)
+
+    def test_cupy_without_devices_stays_in_cpu_mode(self):
+        class Runtime:
+            @staticmethod
+            def getDeviceCount():
+                return 0
+
+        class FakeCuPy:
+            class cuda:
+                runtime = Runtime()
+
+        with mock.patch.dict(sys.modules, {"cupy": FakeCuPy}):
+            state = pipeline.gpu_runtime()
+        self.assertFalse(state["available"])
+        self.assertEqual(state["device_count"], 0)
 
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
