@@ -396,6 +396,22 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertNotIn("best_method", inspect.getsource(pipeline.model_summary))
         self.assertNotIn("quantile", inspect.getsource(pipeline.calibration_metrics))
 
+    def test_matched_permutation_control_preserves_fold_margins(self):
+        features = pd.DataFrame({
+            "Patient_ID": [f"p{i}" for i in range(6)], "SourceSet": ["A"] * 6, "ICULOS": [1] * 6,
+            "SepsisLabel": [0, 1, 0, 1, 0, 1], "TrueSepsisOnset_ICULOS": [math.nan] * 6,
+            "Age": np.arange(6.0), "Hct_last_obs": np.arange(10.0, 16.0), "HR_cv_8h": np.arange(20.0, 26.0),
+        })
+        folds = pd.DataFrame({"Patient_ID": features["Patient_ID"], "SepsisLabel": features["SepsisLabel"], "Fold": [0, 0, 0, 1, 1, 1]})
+        control, columns = pipeline.matched_permutation_control(features, folds)
+        second, second_columns = pipeline.matched_permutation_control(features, folds)
+        self.assertEqual(columns, second_columns)
+        pd.testing.assert_frame_equal(control, second)
+        self.assertEqual(control["Age"].tolist(), features["Age"].tolist())
+        for fold in (0, 1):
+            patients = folds.loc[folds["Fold"] == fold, "Patient_ID"]
+            self.assertEqual(sorted(control.loc[control["Patient_ID"].isin(patients), "HR_cv_8h"]), sorted(features.loc[features["Patient_ID"].isin(patients), "HR_cv_8h"]))
+
     def test_logistic_robustness_reuses_grouped_folds(self):
         features = pd.DataFrame([
             {"Patient_ID": f"p{i:02d}", "SourceSet": "A", "ICULOS": 1, "SepsisLabel": i % 2, "TrueSepsisOnset_ICULOS": math.nan,

@@ -1201,6 +1201,18 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
     }
 
 
+def matched_permutation_control(features: pd.DataFrame, folds: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    merged = require_fold_context(features, folds)
+    baseline = set(model_features(merged, "baseline"))
+    enhanced_only = sorted(set(model_features(merged, "enhanced")).difference(baseline))
+    rng = np.random.default_rng(SEED)
+    for fold in sorted(merged["Fold"].unique()):
+        index = merged.index[merged["Fold"] == fold]
+        for column in enhanced_only:
+            merged.loc[index, column] = rng.permutation(merged.loc[index, column].to_numpy())
+    return merged.drop(columns="Fold"), enhanced_only
+
+
 def ablation_columns(frame: pd.DataFrame, name: str) -> list[str]:
     columns = model_features(frame, "enhanced")
     explicit_process = tuple(column for column in columns if column.endswith(("_is_missing", "_observation_age_hours"))) + (
@@ -1382,6 +1394,18 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
             "brier_platt": summary["platt_nested"]["brier"],
             "utility_at_nested_threshold": summary["challenge_utility"]["platt_at_nested_fold_threshold"],
         })
+    control, permuted_columns = matched_permutation_control(features, folds)
+    control_oof, control_detail = outer_oof(control, folds, "ablation_permuted_enhanced", run_dir, gpu, model_features(control, "enhanced"))
+    control_summary = model_summary(control_oof, "ablation_permuted_enhanced", run_dir)
+    ablations.append({
+        "ablation": "permuted_enhanced_matched_count",
+        "definition": "enhanced-only columns independently permuted within outer folds without outcomes; predictor count unchanged",
+        "feature_count": control_detail["feature_count"], "permuted_feature_count": len(permuted_columns),
+        "average_precision_platt": control_summary["platt_nested"]["average_precision"],
+        "auroc_platt": control_summary["platt_nested"]["auroc"],
+        "brier_platt": control_summary["platt_nested"]["brier"],
+        "utility_at_nested_threshold": control_summary["challenge_utility"]["platt_at_nested_fold_threshold"],
+    })
     atomic_csv(pd.DataFrame(ablations), run_dir / "ablations.csv")
     probast = {
         "instrument": "PROBAST+AI",
