@@ -111,7 +111,8 @@ class ScientificPipelineTests(unittest.TestCase):
             official.compute_prediction_utility(patient["SepsisLabel"].to_numpy(int), (patient["below"] >= 0.5).to_numpy(int))
             for _, patient in below_inaction.groupby("Patient_ID")
         )
-        best = official.compute_prediction_utility(shifted, ((times >= 6) & (times <= 21)).astype(int))
+        # The official scorer is zero-based while ICULOS begins at one.
+        best = official.compute_prediction_utility(shifted, ((times >= 7) & (times <= 22)).astype(int))
         inaction = official.compute_prediction_utility(shifted, np.zeros(24, dtype=int))
         expected = (observed - inaction) / (best - inaction)
         self.assertLess(expected, 0.0)
