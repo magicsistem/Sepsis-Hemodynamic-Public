@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=sepsis_scientific_v2
 #SBATCH --partition=gpu
+#SBATCH --nodelist=compute-0-2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
