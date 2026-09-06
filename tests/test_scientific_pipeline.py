@@ -124,9 +124,10 @@ class ScientificPipelineTests(unittest.TestCase):
         without_late = optimal.copy()
         without_late[18] = 0
         missed = np.zeros(24, dtype=int)
-        self.assertGreater(official.compute_prediction_utility(shifted, optimal), official.compute_prediction_utility(shifted, without_late))
-        self.assertGreater(official.compute_prediction_utility(shifted, without_late), official.compute_prediction_utility(shifted, without_early))
-        self.assertGreater(official.compute_prediction_utility(shifted, without_early), official.compute_prediction_utility(shifted, without_optimal))
+        best_utility = official.compute_prediction_utility(shifted, optimal)
+        self.assertGreater(best_utility, official.compute_prediction_utility(shifted, without_early))
+        self.assertGreater(best_utility, official.compute_prediction_utility(shifted, without_optimal))
+        self.assertGreater(best_utility, official.compute_prediction_utility(shifted, without_late))
         self.assertLess(official.compute_prediction_utility(shifted, missed), 0.0)
         times = np.arange(1, 25)
         frame = pd.DataFrame({"Patient_ID": "A:p000001", "ICULOS": times, "SepsisLabel": shifted})
