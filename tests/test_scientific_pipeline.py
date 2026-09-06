@@ -279,6 +279,11 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn(threshold, pipeline.FEATURE_POLICY["threshold_grid"])
         self.assertNotIn("Fold", inner.columns)  # Outer held-out rows cannot calibrate themselves.
 
+    def test_data_license_notice_distinguishes_local_repackaging(self):
+        notice = (Path(__file__).resolve().parents[1] / "docs" / "data_license.md").read_text(encoding="utf-8")
+        self.assertIn("CC BY 4.0", notice)
+        self.assertIn("not an official PhysioNet archive", notice)
+
     def test_reporting_traceability_and_fail_closed_source_set(self):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.source_and_patient("Dataset.psv")
