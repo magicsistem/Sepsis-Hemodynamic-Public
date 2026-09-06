@@ -128,7 +128,7 @@ def dependency_versions() -> dict[str, str]:
 
 def gpu_runtime() -> dict[str, Any]:
     """Return usable GPU state; importing CuPy alone is never evidence of a GPU."""
-    state: dict[str, Any] = {"available": False, "reason": "CuPy unavailable", "device_count": 0, "gpu_model": None}
+    state: dict[str, Any] = {"available": False, "reason": "CuPy unavailable", "device_count": 0, "gpu_model": None, "cuda_runtime_version": None, "cuda_driver_version": None}
     try:
         import cupy as cp
     except Exception as exc:
@@ -136,7 +136,7 @@ def gpu_runtime() -> dict[str, Any]:
         return state
     try:
         count = int(cp.cuda.runtime.getDeviceCount())
-        state["device_count"] = count
+        state.update({"device_count": count, "cuda_runtime_version": int(cp.cuda.runtime.runtimeGetVersion()), "cuda_driver_version": int(cp.cuda.runtime.driverGetVersion())})
         if count < 1:
             state["reason"] = "CUDA runtime reported zero devices"
             return state
