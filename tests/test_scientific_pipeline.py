@@ -23,6 +23,8 @@ def patient_frame(hours=(1, 2, 3, 4), labels=(0, 0, 0, 0)) -> pd.DataFrame:
     values["ICULOS"] = list(hours)
     values["SepsisLabel"] = list(labels)
     frame = pd.DataFrame(values)
+    frame.insert(0, "Patient_ID", "A:p000001")
+    frame.insert(1, "SourceSet", "A")
     first_positive = np.flatnonzero(frame["SepsisLabel"].to_numpy(dtype=int))
     frame["TrueSepsisOnset_ICULOS"] = frame.loc[first_positive[0], "ICULOS"] + 6 if len(first_positive) else np.nan
     return frame
@@ -102,7 +104,9 @@ class ScientificPipelineTests(unittest.TestCase):
         frame["late"] = (times >= 21).astype(float)
         self.assertAlmostEqual(pipeline.challenge_utility(frame, "zero", 0.5), 0.0)
         self.assertGreater(pipeline.challenge_utility(frame, "early", 0.5), 0.0)
-        self.assertLess(pipeline.challenge_utility(frame.assign(SepsisLabel=0, late=1.0), "late", 0.5), 0.0)
+        self.assertLess(official.compute_prediction_utility(np.zeros(24, dtype=int), np.ones(24, dtype=int)), 0.0)
+        nonseptic = frame.assign(Patient_ID="B:p000001", SourceSet="B", SepsisLabel=0, late=1.0)
+        self.assertLess(pipeline.challenge_utility(pd.concat([frame, nonseptic]), "late", 0.5), 0.0)
 
     def test_average_precision_and_pr_auc_are_named_distinct_estimands(self):
         y = np.array([0, 1, 0, 1])
