@@ -227,6 +227,7 @@ class ScientificPipelineTests(unittest.TestCase):
             backend = pipeline.xgb_backend(state)
             model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, state, n_estimators=2)
             self.assertEqual(model.get_xgb_params()["tree_method"], backend["tree_method"])
+            self.assertEqual(model.get_xgb_params()["eval_metric"], "logloss")
             model.fit(np.array([[0.0], [1.0], [0.0], [1.0]]), np.array([0, 1, 0, 1]), verbose=False)
             self.assertEqual(len(model.predict_proba(np.array([[0.0], [1.0]]))), 2)
 
