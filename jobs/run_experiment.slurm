@@ -33,11 +33,11 @@ fi
 printf 'CEDIA_ENVIRONMENT_BEGIN\n'
 hostname
 uname -a
-python --version
+if command -v python >/dev/null 2>&1; then python --version; else echo "HOST_PYTHON_UNAVAILABLE"; fi
 nvidia-smi
-which python
-which sbatch
-which squeue
+command -v python || true
+command -v sbatch
+command -v squeue
 git --version
 "$RUNTIME" --version
 printf 'CEDIA_ENVIRONMENT_END\n'
