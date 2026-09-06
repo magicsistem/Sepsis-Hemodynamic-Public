@@ -115,12 +115,18 @@ class ScientificPipelineTests(unittest.TestCase):
         predictions = np.array([0, 0, 1, 1, 1, 1])
         self.assertAlmostEqual(official.compute_prediction_utility(labels, predictions), 3.388888888888889)
         shifted = np.array([0] * 12 + [1] * 12)
-        optimal = np.arange(24) == 12
-        early = np.arange(24) == 9
-        late = np.arange(24) == 18
+        optimal = np.zeros(24, dtype=int)
+        optimal[6:22] = 1
+        without_early = optimal.copy()
+        without_early[9] = 0
+        without_optimal = optimal.copy()
+        without_optimal[12] = 0
+        without_late = optimal.copy()
+        without_late[18] = 0
         missed = np.zeros(24, dtype=int)
-        self.assertGreater(official.compute_prediction_utility(shifted, optimal), official.compute_prediction_utility(shifted, early))
-        self.assertGreater(official.compute_prediction_utility(shifted, early), official.compute_prediction_utility(shifted, late))
+        self.assertGreater(official.compute_prediction_utility(shifted, optimal), official.compute_prediction_utility(shifted, without_late))
+        self.assertGreater(official.compute_prediction_utility(shifted, without_late), official.compute_prediction_utility(shifted, without_early))
+        self.assertGreater(official.compute_prediction_utility(shifted, without_early), official.compute_prediction_utility(shifted, without_optimal))
         self.assertLess(official.compute_prediction_utility(shifted, missed), 0.0)
         times = np.arange(1, 25)
         frame = pd.DataFrame({"Patient_ID": "A:p000001", "ICULOS": times, "SepsisLabel": shifted})
