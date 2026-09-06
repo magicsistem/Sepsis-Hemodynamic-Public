@@ -105,8 +105,17 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(pipeline.challenge_utility(frame, "zero", 0.5), 0.0)
         self.assertGreater(pipeline.challenge_utility(frame, "early", 0.5), 0.0)
         self.assertLess(official.compute_prediction_utility(np.zeros(24, dtype=int), np.ones(24, dtype=int)), 0.0)
-        nonseptic = frame.assign(Patient_ID="B:p000001", SourceSet="B", SepsisLabel=0, late=1.0)
-        self.assertLess(pipeline.challenge_utility(pd.concat([frame, nonseptic]), "late", 0.5), 0.0)
+        nonseptic = frame.assign(Patient_ID="B:p000001", SourceSet="B", SepsisLabel=0)
+        below_inaction = pd.concat([frame.assign(below=0.0), nonseptic.assign(below=1.0)], ignore_index=True)
+        observed = sum(
+            official.compute_prediction_utility(patient["SepsisLabel"].to_numpy(int), (patient["below"] >= 0.5).to_numpy(int))
+            for _, patient in below_inaction.groupby("Patient_ID")
+        )
+        best = official.compute_prediction_utility(shifted, ((times >= 6) & (times <= 21)).astype(int))
+        inaction = official.compute_prediction_utility(shifted, np.zeros(24, dtype=int))
+        expected = (observed - inaction) / (best - inaction)
+        self.assertLess(expected, 0.0)
+        self.assertAlmostEqual(pipeline.challenge_utility(below_inaction, "below", 0.5), expected)
 
     def test_average_precision_and_pr_auc_are_named_distinct_estimands(self):
         y = np.array([0, 1, 0, 1])
