@@ -62,6 +62,7 @@ FEATURE_POLICY = {
     "calibration": "pre-specified_platt_nested_inner_oof",
     "calibration_fit_weighting": "equal total weight per patient",
     "calibration_patient_cluster_bootstrap_repeats": 300,
+    "split_stability_seeds": (SEED, SEED + 101, SEED + 202),
     "threshold_grid": tuple(round(x, 2) for x in np.arange(0.05, 1.00, 0.05)),
 }
 
@@ -428,11 +429,11 @@ def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     return columns
 
 
-def write_folds(features: pd.DataFrame, output: Path, n_splits: int = 5) -> dict[str, Any]:
+def write_folds(features: pd.DataFrame, output: Path, n_splits: int = 5, split_seed: int = SEED) -> dict[str, Any]:
     patient = features.groupby("Patient_ID", sort=True)["SepsisLabel"].max().astype(int).reset_index()
     if patient["SepsisLabel"].value_counts().min() < n_splits:
         raise PipelineError("Insufficient septic or non-septic patients for requested outer folds")
-    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=split_seed)
     folds = np.full(len(patient), -1, dtype=int)
     for fold, (_, held_out) in enumerate(splitter.split(patient, patient["SepsisLabel"], groups=patient["Patient_ID"])):
         folds[held_out] = fold
@@ -447,7 +448,7 @@ def write_folds(features: pd.DataFrame, output: Path, n_splits: int = 5) -> dict
         "artifact_sha256": sha256_file(output),
         "patient_count": int(len(patient)),
         "fold_count": n_splits,
-        "seed": SEED,
+        "seed": split_seed,
         "patient_inventory_hash": stable_hash(patient[["Patient_ID", "SepsisLabel"]].to_dict("records")),
     }
 
@@ -510,10 +511,10 @@ MODEL_CANDIDATES = (
 )
 
 
-def inner_patient_splits(patient: pd.DataFrame, n_splits: int = 3, seed_offset: int = 0):
+def inner_patient_splits(patient: pd.DataFrame, n_splits: int = 3, seed_offset: int = 0, split_seed: int = SEED):
     if patient["SepsisLabel"].value_counts().min() < n_splits:
         raise PipelineError("Insufficient class count for nested inner grouped folds")
-    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=SEED + seed_offset)
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=split_seed + seed_offset)
     yield from splitter.split(patient, patient["SepsisLabel"], groups=patient["Patient_ID"])
 
 
@@ -521,10 +522,10 @@ def patient_mask(frame: pd.DataFrame, patients: Iterable[str]) -> np.ndarray:
     return frame["Patient_ID"].isin(set(patients)).to_numpy()
 
 
-def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, Any], outer_fold: int) -> tuple[dict[str, Any], int, pd.DataFrame]:
+def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, Any], outer_fold: int, split_seed: int = SEED) -> tuple[dict[str, Any], int, pd.DataFrame]:
     """Select only inside an outer training partition, then emit unbiased inner OOF raw scores."""
     patient = train.groupby("Patient_ID", sort=True)["SepsisLabel"].max().astype(int).reset_index()
-    splits = list(inner_patient_splits(patient, seed_offset=outer_fold + 1))
+    splits = list(inner_patient_splits(patient, seed_offset=outer_fold + 1, split_seed=split_seed))
     scores: dict[str, list[float]] = {candidate["id"]: [] for candidate in MODEL_CANDIDATES}
     rounds: dict[str, list[int]] = {candidate["id"]: [] for candidate in MODEL_CANDIDATES}
     for candidate_index, candidate in enumerate(MODEL_CANDIDATES):
@@ -533,7 +534,7 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
             valid_patients = patient.iloc[valid_idx]["Patient_ID"]
             fit = train.loc[patient_mask(train, fit_patients)]
             valid = train.loc[patient_mask(train, valid_patients)]
-            model = xgb_model(candidate, SEED + outer_fold * 100 + candidate_index * 10 + inner_fold, gpu, 600, early_stopping=True)
+            model = xgb_model(candidate, split_seed + outer_fold * 100 + candidate_index * 10 + inner_fold, gpu, 600, early_stopping=True)
             model.fit(matrix(fit, columns), fit["SepsisLabel"], eval_set=[(matrix(valid, columns), valid["SepsisLabel"])], verbose=False)
             score = average_precision_score(valid["SepsisLabel"], model.predict_proba(matrix(valid, columns))[:, 1])
             scores[candidate["id"]].append(float(score))
@@ -548,7 +549,7 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
         valid_patients = patient.iloc[valid_idx]["Patient_ID"]
         fit = train.loc[patient_mask(train, fit_patients)]
         valid = train.loc[patient_mask(train, valid_patients)].copy()
-        model = xgb_model(winner, SEED + outer_fold * 1000 + inner_fold, gpu, selected_rounds)
+        model = xgb_model(winner, split_seed + outer_fold * 1000 + inner_fold, gpu, selected_rounds)
         model.fit(matrix(fit, columns), fit["SepsisLabel"], verbose=False)
         valid["inner_prob_raw"] = model.predict_proba(matrix(valid, columns))[:, 1]
         valid["InnerFold"] = inner_fold
@@ -559,11 +560,11 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
     return winner, selected_rounds, inner_oof
 
 
-def fitted_platt(inner_oof: pd.DataFrame) -> LogisticRegression:
+def fitted_platt(inner_oof: pd.DataFrame, split_seed: int = SEED) -> LogisticRegression:
     y = inner_oof["SepsisLabel"].to_numpy(dtype=int)
     if set(y) != {0, 1}:
         raise PipelineError("Nested calibration requires both classes in inner OOF predictions")
-    calibrator = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED)
+    calibrator = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=split_seed)
     calibrator.fit(inner_oof["inner_prob_raw"].to_numpy(dtype=float).reshape(-1, 1), y, sample_weight=equal_patient_weights(inner_oof))
     return calibrator
 
@@ -812,9 +813,10 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
 
 
 def outer_oof(
-    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, gpu: dict[str, Any], columns_override: list[str] | None = None
+    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, gpu: dict[str, Any], columns_override: list[str] | None = None, split_seed: int = SEED, artifact_stem: str | None = None
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     merged = require_fold_context(features, folds)
+    artifact_stem = artifact_stem or variant
     columns = columns_override or model_features(merged, variant)
     records: list[pd.DataFrame] = []
     selection_rows: list[dict[str, Any]] = []
@@ -825,11 +827,11 @@ def outer_oof(
         test_patients = set(outer_test["Patient_ID"])
         if train_patients & test_patients:
             raise PipelineError("Outer-fold patient overlap")
-        candidate, selected_rounds, inner_oof = select_inner_model(outer_train, columns, gpu, int(outer_fold))
-        calibrator = fitted_platt(inner_oof)
+        candidate, selected_rounds, inner_oof = select_inner_model(outer_train, columns, gpu, int(outer_fold), split_seed)
+        calibrator = fitted_platt(inner_oof, split_seed)
         inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
         threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
-        model = xgb_model(candidate, SEED + int(outer_fold), gpu, selected_rounds)
+        model = xgb_model(candidate, split_seed + int(outer_fold), gpu, selected_rounds)
         model.fit(matrix(outer_train, columns), outer_train["SepsisLabel"], verbose=False)
         outer_test["prob_raw"] = model.predict_proba(matrix(outer_test, columns))[:, 1]
         outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
@@ -851,16 +853,16 @@ def outer_oof(
     oof = pd.concat(records, ignore_index=True).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
     if len(oof) != len(merged) or oof.duplicated(["Patient_ID", "ICULOS"]).any():
         raise PipelineError("Outer OOF output does not contain each row exactly once")
-    atomic_csv(oof, output_dir / f"{variant}_oof_predictions.csv")
-    atomic_csv(pd.DataFrame(selection_rows), output_dir / f"{variant}_nested_selection.csv")
+    atomic_csv(oof, output_dir / f"{artifact_stem}_oof_predictions.csv")
+    atomic_csv(pd.DataFrame(selection_rows), output_dir / f"{artifact_stem}_nested_selection.csv")
     return oof, {
         "model_variant": variant,
         "feature_count": len(columns),
         "feature_column_hash": stable_hash(columns),
-        "oof_artifact": f"{variant}_oof_predictions.csv",
-        "oof_sha256": sha256_file(output_dir / f"{variant}_oof_predictions.csv"),
-        "selection_artifact": f"{variant}_nested_selection.csv",
-        "selection_sha256": sha256_file(output_dir / f"{variant}_nested_selection.csv"),
+        "oof_artifact": f"{artifact_stem}_oof_predictions.csv",
+        "oof_sha256": sha256_file(output_dir / f"{artifact_stem}_oof_predictions.csv"),
+        "selection_artifact": f"{artifact_stem}_nested_selection.csv",
+        "selection_sha256": sha256_file(output_dir / f"{artifact_stem}_nested_selection.csv"),
         "gpu": gpu,
     }
 
@@ -1053,6 +1055,10 @@ def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
             errors.append(relative)
     if errors:
         raise PipelineError(f"Result manifest hash validation failed: {errors}")
+    stability = pd.read_csv(run_dir / "split_stability.csv")
+    required_stability = {"split_seed", "model_variant", "fold_artifact", "fold_sha256", "auroc", "average_precision"}
+    if len(stability) != 2 * len(FEATURE_POLICY["split_stability_seeds"]) or set(stability["split_seed"]) != set(FEATURE_POLICY["split_stability_seeds"]) or not required_stability.issubset(stability.columns):
+        raise PipelineError("Repeated grouped split-stability artifact is invalid")
     for variant in ("baseline", "enhanced"):
         oof = pd.read_csv(run_dir / f"{variant}_oof_predictions.csv")
         features = model_features(oof, variant)
@@ -1092,6 +1098,21 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         oofs[variant], stages[variant] = outer_oof(features, folds, variant, run_dir, gpu)
         summaries[variant] = model_summary(oofs[variant], variant, run_dir)
     atomic_json(run_dir / "metrics.json", summaries)
+    stability_rows = [
+        {"split_seed": SEED, "model_variant": variant, "fold_artifact": "folds.csv", "fold_sha256": stages["folds"]["artifact_sha256"], **discrimination_metrics(oofs[variant]["SepsisLabel"].to_numpy(dtype=int), oofs[variant]["prob_platt"].to_numpy(dtype=float))}
+        for variant in ("baseline", "enhanced")
+    ]
+    stability_manifests = []
+    for split_seed in FEATURE_POLICY["split_stability_seeds"][1:]:
+        fold_path = run_dir / f"stability_folds_seed_{split_seed}.csv"
+        fold_manifest = write_folds(features, fold_path, split_seed=split_seed)
+        stability_manifests.append(fold_manifest)
+        stable_folds = pd.read_csv(fold_path)
+        for variant in ("baseline", "enhanced"):
+            stable_oof, detail = outer_oof(features, stable_folds, variant, run_dir, gpu, split_seed=split_seed, artifact_stem=f"stability_seed_{split_seed}_{variant}")
+            stability_rows.append({"split_seed": split_seed, "model_variant": variant, "fold_artifact": fold_path.name, "fold_sha256": fold_manifest["artifact_sha256"], "feature_column_hash": detail["feature_column_hash"], **discrimination_metrics(stable_oof["SepsisLabel"].to_numpy(dtype=int), stable_oof["prob_platt"].to_numpy(dtype=float))})
+    atomic_csv(pd.DataFrame(stability_rows), run_dir / "split_stability.csv")
+    stages["split_stability"] = {"artifact": "split_stability.csv", "artifact_sha256": sha256_file(run_dir / "split_stability.csv"), "seeds": list(FEATURE_POLICY["split_stability_seeds"]), "additional_fold_manifests": stability_manifests}
     if not oofs["baseline"][["Patient_ID", "ICULOS", "SepsisLabel", "Fold"]].equals(
         oofs["enhanced"][["Patient_ID", "ICULOS", "SepsisLabel", "Fold"]]
     ):
@@ -1132,7 +1153,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "features": stages["features"],
         "folds": stages["folds"],
         "models_oof_calibration": {variant: stages[variant] for variant in ("baseline", "enhanced")},
-        "statistics": {"inference": "inference.csv", "transport": "transport.csv", "ablations": "ablations.csv"},
+        "statistics": {"inference": "inference.csv", "transport": "transport.csv", "ablations": "ablations.csv", "split_stability": "split_stability.csv"},
     }
     initial = {
         "runtime": runtime,

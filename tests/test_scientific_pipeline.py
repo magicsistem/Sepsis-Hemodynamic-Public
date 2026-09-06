@@ -86,9 +86,13 @@ class ScientificPipelineTests(unittest.TestCase):
         features = pd.concat(patients, ignore_index=True)
         with tempfile.TemporaryDirectory() as directory:
             fold_path = Path(directory) / "folds.csv"
-            pipeline.write_folds(features, fold_path, n_splits=5)
+            first = pipeline.write_folds(features, fold_path, n_splits=5)
+            second_path = Path(directory) / "folds_second.csv"
+            second = pipeline.write_folds(features, second_path, n_splits=5, split_seed=pipeline.SEED + 101)
             merged = pipeline.require_fold_context(features, pd.read_csv(fold_path))
         self.assertTrue((merged.groupby("Patient_ID")["Fold"].nunique() == 1).all())
+        self.assertEqual(first["seed"], pipeline.SEED)
+        self.assertEqual(second["seed"], pipeline.SEED + 101)
 
     def test_source_provenance_hash_validation_is_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
