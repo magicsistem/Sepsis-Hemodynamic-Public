@@ -339,6 +339,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
         self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
+        self.assertIn("logs/run_ledger.tsv", job)
+        self.assertIn("trap '", job)
         self.assertNotIn('os.environ["PYTHONHASHSEED"] =', (root / "src" / "scientific_pipeline.py").read_text(encoding="utf-8"))
         production = "\n".join(path.read_text(encoding="utf-8") for directory in (root / "src", root / "scripts") for path in directory.glob("*.py"))
         self.assertNotIn('filterwarnings("ignore")', production)
