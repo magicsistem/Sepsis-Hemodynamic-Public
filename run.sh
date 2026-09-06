@@ -7,11 +7,13 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$ROOT"
 export PYTHONHASHSEED=20260906
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+SOURCE_SIDECAR="$ROOT/.source_provenance.json"
 
 if [[ "${1:-}" == "--inside-slurm" ]]; then
     [[ -n "${SLURM_JOB_ID:-}" ]] || { echo "FAIL: --inside-slurm requires Slurm" >&2; exit 1; }
     [[ -n "${RUN_ID:-}" ]] || { echo "FAIL: RUN_ID is required" >&2; exit 1; }
     [[ -n "${RUN_DIR:-}" ]] || { echo "FAIL: RUN_DIR is required" >&2; exit 1; }
+    python scripts/source_provenance.py --validate "$SOURCE_SIDECAR"
     python -m unittest discover -s tests -v
     if [[ "${RUN_TESTS_ONLY:-false}" == true ]]; then
         printf 'TEST_SUITE_PASS run_id=%s\n' "$RUN_ID"
@@ -37,14 +39,12 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     }
     SOURCE_GIT_COMMIT=$(git rev-parse HEAD)
     SOURCE_GIT_DIRTY=false
+    python scripts/source_provenance.py --write "$SOURCE_SIDECAR"
 else
-    [[ -f .source_provenance.json ]] || { echo "FAIL: missing laptop source provenance sidecar" >&2; exit 1; }
-    SOURCE_GIT_COMMIT=$(sed -n 's/.*"git_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' .source_provenance.json)
-    SOURCE_GIT_DIRTY=$(sed -n 's/.*"git_dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' .source_provenance.json)
-    [[ "$SOURCE_GIT_COMMIT" =~ ^[0-9a-f]{40}$ && "$SOURCE_GIT_DIRTY" == false ]] || {
-        echo "FAIL: invalid or dirty laptop source provenance sidecar" >&2
-        exit 1
-    }
+    [[ -f "$SOURCE_SIDECAR" ]] || { echo "FAIL: missing laptop source provenance sidecar" >&2; exit 1; }
+    python scripts/source_provenance.py --validate "$SOURCE_SIDECAR"
+    SOURCE_GIT_COMMIT=$(sed -n 's/.*"git_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$SOURCE_SIDECAR")
+    SOURCE_GIT_DIRTY=$(sed -n 's/.*"git_dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$SOURCE_SIDECAR")
 fi
 export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY
 command -v sbatch >/dev/null || { echo "FAIL: sbatch is required; invoke on CEDIA" >&2; exit 1; }
@@ -61,7 +61,7 @@ while squeue -h -j "$JOB_ID" | grep -q .; do
     sleep 15
 done
 STATE=$(sacct -n -X -j "$JOB_ID" --format=State --parsable2 | sed -n '1p' | tr -d '[:space:]')
-[[ "$STATE" == COMPLETED ]] || { echo "FAIL: Slurm job $JOB_ID ended as ${STATE:-unknown}; inspect logs/run-${JOB_ID}.out and .err" >&2; exit 1; }
+[[ "$STATE" == COMPLETED ]] || { echo "FAIL: Slurm job $JOB_ID ended as ${STATE:-unknown}; inspect sepsis_scientific_v2-${JOB_ID}.out and .err" >&2; exit 1; }
 if [[ "$TESTS_ONLY" == true ]]; then
     printf 'TEST_SUITE_PASS run_id=%s job_id=%s\n' "$RUN_ID" "$JOB_ID"
 else

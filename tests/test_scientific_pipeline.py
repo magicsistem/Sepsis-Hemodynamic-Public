@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import tempfile
@@ -11,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts import source_provenance
 from src import scientific_pipeline as pipeline
 from vendor.physionet2019 import evaluate_sepsis_score as official
 
@@ -65,6 +67,20 @@ class ScientificPipelineTests(unittest.TestCase):
             pipeline.write_folds(features, fold_path, n_splits=5)
             merged = pipeline.require_fold_context(features, pd.read_csv(fold_path))
         self.assertTrue((merged.groupby("Patient_ID")["Fold"].nunique() == 1).all())
+
+    def test_source_provenance_hash_validation_is_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "run.sh"
+            source.write_text("original\n")
+            files = {"run.sh": source_provenance.sha256_file(str(source))}
+            sidecar = root / ".source_provenance.json"
+            payload = {"git_commit": "0" * 40, "git_dirty": False, "files": files, "source_inventory_sha256": source_provenance.inventory_hash(files)}
+            sidecar.write_text(json.dumps(payload))
+            self.assertEqual(source_provenance.validate_sidecar(str(root), str(sidecar))["files"], files)
+            source.write_text("altered\n")
+            with self.assertRaises(source_provenance.SourceProvenanceError):
+                source_provenance.validate_sidecar(str(root), str(sidecar))
 
     def test_no_future_last_observation_and_static_features(self):
         values = pd.Series([1.0, np.nan, np.nan])
