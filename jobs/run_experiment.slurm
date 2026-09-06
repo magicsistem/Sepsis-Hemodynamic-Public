@@ -16,13 +16,13 @@ set -euo pipefail
 : "${RUN_ID:?RUN_ID must be supplied by run.sh}"
 : "${RUN_DIR:?RUN_DIR must be supplied by run.sh}"
 CONTAINER=${SEPSIS_CONTAINER:-/home/miguel.benavides__yachaytech.edu.ec/pytorch_24.01-py3.sif}
-[[ -f "$CONTAINER" ]] || { echo "FAIL: container not found: $CONTAINER" >&2; exit 1; }
-CONTAINER_SHA256=$(sha256sum "$CONTAINER" | awk '{print $1}')
 mkdir -p "$PROJECT_DIR/logs"
 LEDGER="$PROJECT_DIR/logs/run_ledger.tsv"
 ledger_event() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "${SLURM_JOB_ID:-unknown}" "$SOURCE_GIT_COMMIT" "$(hostname)" "$1" >> "$LEDGER"; }
 ledger_event STARTED
 trap 'status=$?; if [[ $status -eq 0 ]]; then ledger_event COMPLETED; else ledger_event "FAILED_exit_${status}"; fi' EXIT
+[[ -f "$CONTAINER" ]] || { echo "FAIL: container not found: $CONTAINER" >&2; exit 1; }
+CONTAINER_SHA256=$(sha256sum "$CONTAINER" | awk '{print $1}')
 cd "$PROJECT_DIR"
 
 if command -v singularity >/dev/null 2>&1; then
