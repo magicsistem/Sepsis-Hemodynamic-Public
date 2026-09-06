@@ -278,6 +278,7 @@ class ScientificPipelineTests(unittest.TestCase):
         expected = pipeline.average_precision_score(oof["SepsisLabel"], oof["prob_raw"])
         self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
         self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
+        self.assertAlmostEqual(summary["prevalence_only_brier_reference"], np.mean(oof["SepsisLabel"]) * (1 - np.mean(oof["SepsisLabel"])))
         self.assertIn("fold-specific monotone calibrators", summary["platt_nested"]["discrimination_interpretation"])
         self.assertIn("not a threshold for a final deployable model", summary["operating_policy_interpretation"])
 
@@ -302,8 +303,10 @@ class ScientificPipelineTests(unittest.TestCase):
         age = {row["subgroup"]: row for row in pipeline.age_subgroup_metrics(age_frame, "probability")}
         self.assertEqual([age[group]["n_rows"] for group in ("<50", "50_to_<70", ">=70", "missing")], [1, 2, 1, 1])
         self.assertTrue(all(row["subgroup_schema_version"] == "age_v1_left_closed_50_70" for row in age.values()))
+        self.assertTrue(all(row["probability_source"] == "probability" for row in age.values()))
 
         features = pipeline.feature_patient(patient_frame(), include_hemodynamics=True)
+        self.assertFalse(any(column.endswith("_shannon_5h") for column in features.columns))
         process = pipeline.ablation_columns(features, "without_explicit_process")
         physiology = pipeline.ablation_columns(features, "physiology_measurements_only")
         for columns in (process, physiology):

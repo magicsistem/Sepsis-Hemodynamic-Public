@@ -388,7 +388,6 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
             std_8h = rolling_feature(raw, 8, "std")
             engineered[f"{column}_cv_8h"] = (std_8h / mean_8h.abs()).replace([np.inf, -np.inf], np.nan).to_numpy()
             engineered[f"{column}_iqr_8h"] = rolling_feature(raw, 8, "iqr").to_numpy()
-            engineered[f"{column}_shannon_5h"] = rolling_feature(raw, 5, "shannon").to_numpy()
             observed = pd.Series(raw.notna().to_numpy(dtype="int8"), index=pd.to_timedelta(times.to_numpy(dtype=float), unit="h"))
             engineered[f"{column}_sampen_effective_n_24h"] = observed.rolling("24h", closed="right").sum().to_numpy(dtype="int16")
             sampen = causal_sampen(raw, times)
@@ -858,6 +857,7 @@ def age_subgroup_metrics(frame: pd.DataFrame, probability_column: str) -> list[d
         both_classes = set(y) == {0, 1}
         rows.append({
             "subgroup_schema_version": "age_v1_left_closed_50_70",
+            "probability_source": probability_column,
             "subgroup": group,
             "unit": "descriptive row-time performance; no independent-row inference",
             "n_rows": int(len(subset)),
@@ -1017,6 +1017,7 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
         "n_rows": int(len(oof)),
         "n_patients": int(oof["Patient_ID"].nunique()),
         "n_positive_rows": int(y.sum()),
+        "prevalence_only_brier_reference": float(y.mean() * (1 - y.mean())),
         "raw": {**discrimination_metrics(y, raw), **raw_calibration},
         "platt_nested": {
             **discrimination_metrics(y, calibrated), **platt_calibration,
