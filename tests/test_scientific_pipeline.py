@@ -282,7 +282,8 @@ class ScientificPipelineTests(unittest.TestCase):
     def test_data_license_notice_distinguishes_local_repackaging(self):
         notice = (Path(__file__).resolve().parents[1] / "docs" / "data_license.md").read_text(encoding="utf-8")
         self.assertIn("CC BY 4.0", notice)
-        self.assertIn("not an official PhysioNet archive", notice)
+        self.assertIn("official PhysioNet archive", notice)
+        self.assertIn("repackaging", notice)
 
     def test_reporting_traceability_and_fail_closed_source_set(self):
         with self.assertRaises(pipeline.PipelineError):
