@@ -733,29 +733,43 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
 
 
 def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Iterable[float]) -> list[dict[str, Any]]:
-    """Patient-level action: initiate assessment if an eligible alert occurs."""
+    """Patient-level DCA for assessment after any alert before true onset."""
     rows: list[dict[str, Any]] = []
-    patient_truth = frame.groupby("Patient_ID", sort=False)["TrueSepsisOnset_ICULOS"].first().notna().astype(int)
-    n = len(patient_truth)
-    if not n:
+    patients = []
+    for patient_id, patient in frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").groupby("Patient_ID", sort=False):
+        onset = patient["TrueSepsisOnset_ICULOS"].dropna().unique()
+        septic = bool(len(onset))
+        at_risk = patient["ICULOS"] < float(onset[0]) if septic else pd.Series(True, index=patient.index)
+        patients.append({
+            "Patient_ID": patient_id,
+            "septic": int(septic),
+            "pre_onset_probability": patient.loc[at_risk, probability_column].to_numpy(dtype=float),
+        })
+    if not patients:
         raise PipelineError("Cannot compute DCA without patients")
     for threshold in thresholds:
-        metric = early_warning_metrics(
-            frame.assign(_fixed_threshold=float(threshold)), probability_column, "_fixed_threshold"
-        )
-        table = pd.DataFrame(metric["patients"])
-        predicted = table["status"].eq("TP_patient_useful_window").astype(int)
-        truth = table.set_index("Patient_ID")["septic"].astype(int).reindex(patient_truth.index).to_numpy()
-        tp = int(((predicted.to_numpy() == 1) & (truth == 1)).sum())
-        fp = int(((predicted.to_numpy() == 1) & (truth == 0)).sum())
-        prevalence = float(patient_truth.mean())
-        odds = threshold / (1 - threshold)
+        if not 0 < float(threshold) < 1:
+            raise PipelineError("DCA threshold probabilities must lie strictly between zero and one")
+        odds = float(threshold) / (1 - float(threshold))
+        truth = np.asarray([row["septic"] for row in patients], dtype=int)
+        action = np.asarray([np.any(row["pre_onset_probability"] >= threshold) for row in patients], dtype=int)
+        model_contribution = action * truth - action * (1 - truth) * odds
+        treat_all_contribution = truth - (1 - truth) * odds
+        model_ci = bootstrap_ci(model_contribution, seed=SEED + int(round(threshold * 1000)))
+        all_ci = bootstrap_ci(treat_all_contribution, seed=SEED + 10000 + int(round(threshold * 1000)))
         rows.append({
-            "action": "initiate assessment after eligible alert in [onset-12h,onset-1h]",
+            "action": "initiate assessment after any pre-onset alert; any alert for nonseptic patients",
             "threshold_probability": float(threshold),
-            "model_net_benefit": tp / n - fp / n * odds,
-            "treat_all_net_benefit": prevalence - (1 - prevalence) * odds,
+            "model_net_benefit": float(model_contribution.mean()),
+            "model_net_benefit_ci_95_low": model_ci[0],
+            "model_net_benefit_ci_95_high": model_ci[1],
+            "treat_all_net_benefit": float(treat_all_contribution.mean()),
+            "treat_all_net_benefit_ci_95_low": all_ci[0],
+            "treat_all_net_benefit_ci_95_high": all_ci[1],
             "treat_none_net_benefit": 0.0,
+            "n_patients": int(len(patients)),
+            "tp_patients": int((action * truth).sum()),
+            "fp_patients": int((action * (1 - truth)).sum()),
             "unit": "patient",
         })
     return rows

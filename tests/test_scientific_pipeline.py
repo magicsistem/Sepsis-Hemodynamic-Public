@@ -142,6 +142,18 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("trapezoidal_pr_auc", metrics)
         self.assertEqual(metrics["xgboost_training_eval_metric"], "logloss")
 
+    def test_dca_uses_patient_actions_and_counts_false_alerts(self):
+        frame = pd.DataFrame({
+            "Patient_ID": ["A:p1"] * 3 + ["A:p2"] * 3,
+            "ICULOS": [1, 2, 3] * 2,
+            "TrueSepsisOnset_ICULOS": [4.0] * 3 + [math.nan] * 3,
+            "probability": [0.1, 0.8, 0.1, 0.9, 0.1, 0.1],
+        })
+        row = pipeline.decision_curve(frame, "probability", [0.5])[0]
+        self.assertEqual((row["tp_patients"], row["fp_patients"]), (1, 1))
+        self.assertAlmostEqual(row["model_net_benefit"], 0.0)
+        self.assertIn("model_net_benefit_ci_95_low", row)
+
     def test_ece_definition_is_fixed_equal_width_bins(self):
         y = np.array([0, 1, 1, 0])
         p = np.array([0.1, 0.1, 0.9, 0.9])
