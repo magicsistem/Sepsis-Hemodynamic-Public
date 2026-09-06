@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
@@ -42,6 +43,21 @@ class ScientificPipelineTests(unittest.TestCase):
         headers[0] = "ALT"
         with self.assertRaises(pipeline.PipelineError):
             pipeline.canonical_headers(headers, "p000001.psv")
+
+    def test_archive_inventory_is_filename_sorted_and_rejects_csv_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "input.zip"
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("training_setB/training/p000002.psv", "header\n")
+                handle.writestr("Dataset.csv", "historical fallback\n")
+                handle.writestr("training_setA/training/p000001.psv", "header\n")
+            psv, inventory = pipeline.archive_inventory(archive)
+            self.assertEqual([member.filename for member in psv], ["training_setA/training/p000001.psv", "training_setB/training/p000002.psv"])
+            self.assertEqual(inventory["member_count"], 3)
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("Dataset.csv", "only fallback\n")
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.archive_inventory(archive)
 
     def test_chronology_and_persistent_shifted_labels_are_fail_closed(self):
         valid = patient_frame(hours=(1, 2, 3, 4), labels=(0, 1, 1, 1))

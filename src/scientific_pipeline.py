@@ -238,7 +238,7 @@ def validate_patient_frame(frame: pd.DataFrame, member_name: str) -> pd.DataFram
 
 def archive_inventory(archive: Path) -> tuple[list[zipfile.ZipInfo], dict[str, Any]]:
     with zipfile.ZipFile(archive) as zf:
-        members = sorted(info for info in zf.infolist() if not info.is_dir())
+        members = sorted((info for info in zf.infolist() if not info.is_dir()), key=lambda info: info.filename)
     psv = [info for info in members if info.filename.lower().endswith(".psv")]
     if not psv:
         raise PipelineError("Archive contains no PSV patient files; CSV/TSV fallback is prohibited.")
