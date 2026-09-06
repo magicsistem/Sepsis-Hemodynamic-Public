@@ -179,6 +179,11 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
         "seed": SEED,
         "pythonhashseed": os.environ.get("PYTHONHASHSEED", "unset"),
         "dependencies": dependency_versions(),
+        "execution_environment": {
+            "container_path": os.environ.get("SOURCE_CONTAINER_PATH", "not-scheduled"),
+            "container_sha256": os.environ.get("SOURCE_CONTAINER_SHA256", "not-scheduled"),
+            "container_runtime": os.environ.get("SOURCE_CONTAINER_RUNTIME", "not-scheduled"),
+        },
         "gpu": gpu,
         "xgboost_backend": xgb_backend(gpu),
         "official_utility": {

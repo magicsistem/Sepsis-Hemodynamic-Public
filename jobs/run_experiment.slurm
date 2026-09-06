@@ -16,6 +16,7 @@ set -euo pipefail
 : "${RUN_DIR:?RUN_DIR must be supplied by run.sh}"
 CONTAINER=${SEPSIS_CONTAINER:-/home/miguel.benavides__yachaytech.edu.ec/pytorch_24.01-py3.sif}
 [[ -f "$CONTAINER" ]] || { echo "FAIL: container not found: $CONTAINER" >&2; exit 1; }
+CONTAINER_SHA256=$(sha256sum "$CONTAINER" | awk '{print $1}')
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 
@@ -49,4 +50,7 @@ printf 'CEDIA_ENVIRONMENT_END\n'
     REQUIRE_GPU=true \
     SOURCE_GIT_COMMIT="$SOURCE_GIT_COMMIT" \
     SOURCE_GIT_DIRTY="$SOURCE_GIT_DIRTY" \
+    SOURCE_CONTAINER_PATH="$CONTAINER" \
+    SOURCE_CONTAINER_SHA256="$CONTAINER_SHA256" \
+    SOURCE_CONTAINER_RUNTIME="$RUNTIME" \
     bash run.sh --inside-slurm

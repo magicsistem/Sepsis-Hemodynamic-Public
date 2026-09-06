@@ -284,6 +284,7 @@ class ScientificPipelineTests(unittest.TestCase):
             pipeline.source_and_patient("Dataset.psv")
         required = {"runtime", "stages", "artifact_sha256", "lineage", "final_validation", "scientific_status"}
         self.assertTrue(required.issuperset({"runtime", "lineage"}))
+        self.assertIn("execution_environment", pipeline.runtime_manifest(Path.cwd(), "test", sys.argv, Path(__file__)))
 
 
 if __name__ == "__main__":
