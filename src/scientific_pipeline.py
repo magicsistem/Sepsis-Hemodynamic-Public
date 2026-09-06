@@ -387,6 +387,8 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
             engineered[f"{column}_cv_8h"] = (std_8h / mean_8h.abs()).replace([np.inf, -np.inf], np.nan).to_numpy()
             engineered[f"{column}_iqr_8h"] = rolling_feature(raw, 8, "iqr").to_numpy()
             engineered[f"{column}_shannon_5h"] = rolling_feature(raw, 5, "shannon").to_numpy()
+            observed = pd.Series(raw.notna().to_numpy(dtype="int8"), index=pd.to_timedelta(times.to_numpy(dtype=float), unit="h"))
+            engineered[f"{column}_sampen_effective_n_24h"] = observed.rolling("24h", closed="right").sum().to_numpy(dtype="int16")
             sampen = causal_sampen(raw, times)
             engineered[f"{column}_sampen_24h_zero_match"] = np.isposinf(sampen).astype("int8")
             engineered[f"{column}_sampen_24h"] = sampen.replace([np.inf, -np.inf], np.nan).to_numpy()
@@ -423,7 +425,7 @@ def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     # ICULOS is an observed official predictor, not an identifier. SourceSet is
     # administrative provenance and is never a model input.
     excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS"}
-    columns = [column for column in frame.columns if column not in excluded]
+    columns = [column for column in frame.columns if column not in excluded and not column.endswith("_sampen_effective_n_24h")]
     hemodynamic = [column for column in columns if any(column.startswith(f"{signal}_") for signal in HEMODYNAMIC_COLUMNS)]
     if variant == "baseline":
         columns = [column for column in columns if column not in hemodynamic]
@@ -784,6 +786,31 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
         },
         "patients": rows,
     }
+
+
+def measurement_support_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    times = frame["ICULOS"]
+    strata = (
+        ("all_hours", pd.Series(True, index=frame.index)),
+        ("ICULOS_1_6h", times.between(1, 6)),
+        ("ICULOS_7_12h", times.between(7, 12)),
+        ("ICULOS_13_24h", times.between(13, 24)),
+        ("ICULOS_25h_plus", times >= 25),
+    )
+    for signal in HEMODYNAMIC_COLUMNS:
+        column = f"{signal}_sampen_effective_n_24h"
+        for stratum, mask in strata:
+            values = frame.loc[mask, column].to_numpy(dtype=float)
+            rows.append({
+                "signal": signal, "time_stratum": stratum, "n_rows": int(len(values)),
+                "median_effective_n": float(np.median(values)) if len(values) else math.nan,
+                "q1_effective_n": float(np.quantile(values, 0.25)) if len(values) else math.nan,
+                "q3_effective_n": float(np.quantile(values, 0.75)) if len(values) else math.nan,
+                "fraction_meeting_sampen_minimum": float(np.mean(values >= FEATURE_POLICY["sampen"]["min_observations"])) if len(values) else math.nan,
+                "model_input": False,
+            })
+    return rows
 
 
 def age_subgroup_metrics(frame: pd.DataFrame, probability_column: str) -> list[dict[str, Any]]:
@@ -1223,6 +1250,8 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     stages["folds"] = write_folds(pd.read_csv(run_dir / "features.csv"), run_dir / "folds.csv")
     atomic_json(run_dir / "folds_manifest.json", stages["folds"])
     features = pd.read_csv(run_dir / "features.csv")
+    atomic_csv(pd.DataFrame(measurement_support_rows(features)), run_dir / "measurement_support.csv")
+    stages["measurement_support"] = {"artifact": "measurement_support.csv", "artifact_sha256": sha256_file(run_dir / "measurement_support.csv"), "input_sha256": stages["features"]["artifact_sha256"]}
     folds = pd.read_csv(run_dir / "folds.csv")
     summaries: dict[str, Any] = {}
     oofs: dict[str, pd.DataFrame] = {}
@@ -1303,6 +1332,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     raw_node = node(raw_artifact, {}, "external_input", ("physionet_cinc_2019_local_repackaging",))
     harmonized_node = node("harmonized.csv", {raw_artifact: raw_node["sha256"]}, "src.scientific_pipeline:harmonize_archive", ("official_40_predictor_schema_v1", "challenge_shifted_persistent_label"))
     features_node = node("features.csv", {"harmonized.csv": harmonized_node["sha256"]}, "src.scientific_pipeline:build_features", ("causal_feature_policy_v1",))
+    support_node = node("measurement_support.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:measurement_support_rows", ("observed_sampen_effective_n_24h_v1",))
     folds_node = node("folds.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds", ("stratified_group_kfold_patient_v1",))
     model_nodes = {
         variant: node(
@@ -1339,6 +1369,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "raw_data": raw_node,
         "harmonized": harmonized_node,
         "features": features_node,
+        "measurement_support": support_node,
         "folds": folds_node,
         "models_oof_calibration": model_nodes,
         "reported_products": reported_products,

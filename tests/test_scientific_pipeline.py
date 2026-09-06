@@ -136,6 +136,19 @@ class ScientificPipelineTests(unittest.TestCase):
         # backend parity condition is identity rather than CPU/Numba disagreement.
         self.assertEqual(pipeline.sample_entropy([1, 1, 1, 1]), pipeline.sample_entropy(np.ones(4)))
 
+    def test_sampen_support_counts_observations_not_forward_fill(self):
+        patient = patient_frame()
+        patient["HR"] = [80.0, np.nan, np.nan, 83.0]
+        features = pipeline.feature_patient(patient, include_hemodynamics=True)
+        self.assertEqual(features["HR_last_obs"].tolist(), [80.0, 80.0, 80.0, 83.0])
+        self.assertEqual(features["HR_sampen_effective_n_24h"].tolist(), [1, 1, 1, 2])
+        self.assertTrue(features["HR_sampen_24h"].isna().all())
+        self.assertNotIn("HR_sampen_effective_n_24h", pipeline.model_features(features, "enhanced"))
+        support = pipeline.measurement_support_rows(features)
+        hr_all = next(row for row in support if row["signal"] == "HR" and row["time_stratum"] == "all_hours")
+        self.assertEqual(hr_all["median_effective_n"], 1.0)
+        self.assertEqual(hr_all["fraction_meeting_sampen_minimum"], 0.0)
+
     def test_rolling_and_shannon_oracles(self):
         series = pd.Series([1.0, 2.0, 3.0], index=[1.0, 2.0, 3.0])
         mean = pipeline.rolling_feature(series, 5, "mean")
