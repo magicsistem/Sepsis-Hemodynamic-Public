@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
@@ -139,6 +140,7 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(mean.iloc[2], 2.0)
         self.assertAlmostEqual(pipeline.shannon_entropy([0, 0, 1, 1], bins=2), math.log(2))
         self.assertGreaterEqual(pipeline.shannon_entropy([0, 0, 1, 1], bins=2), 0.0)
+        self.assertNotIn("cudf", inspect.getsource(pipeline.rolling_feature).lower())
 
     def test_official_utility_oracles_and_below_inaction_normalization(self):
         labels = np.array([0, 0, 0, 0, 1, 1])
@@ -217,6 +219,33 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(summary["post_onset_alarm_episodes"], 1)
         self.assertAlmostEqual(summary["time_in_alert_fraction_observed"], 6 / 22)
         self.assertIn("6h refractory", summary["alarm_episode_policy"])
+        remote_only = frame.loc[frame["Patient_ID"] == "A:p1"].copy()
+        remote_only["probability"] = 0.0
+        remote_only.loc[remote_only["ICULOS"] == 1, "probability"] = 1.0
+        remote_summary = pipeline.early_warning_metrics(remote_only, "probability", "threshold")["summary"]
+        self.assertEqual((remote_summary["tp_patients"], remote_summary["fn_patients"]), (0, 1))
+        self.assertTrue(math.isnan(remote_summary["median_lead_time_hours"]))
+        self.assertEqual(remote_summary["false_alarm_episodes"], 1)
+
+    def test_reporting_writes_metrics_from_supplied_oof(self):
+        rows = []
+        for patient in range(40):
+            septic = patient % 2 == 0
+            labels = [0, 0, 1, 1] if septic else [0, 0, 0, 0]
+            probabilities = [0.10, 0.20, 0.70, 0.80] if septic else [0.10, 0.20, 0.30, 0.40]
+            for hour, (label, probability) in enumerate(zip(labels, probabilities), start=1):
+                rows.append({
+                    "Patient_ID": f"A:p{patient:03d}", "ICULOS": hour,
+                    "SepsisLabel": label, "TrueSepsisOnset_ICULOS": 9.0 if septic else math.nan,
+                    "prob_raw": probability, "prob_platt": probability, "nested_threshold": 0.5,
+                })
+        oof = pd.DataFrame(rows)
+        with tempfile.TemporaryDirectory() as directory:
+            summary = pipeline.model_summary(oof, "oracle", Path(directory))
+            emitted = json.loads((Path(directory) / "oracle_metrics.json").read_text(encoding="utf-8"))
+        expected = pipeline.average_precision_score(oof["SepsisLabel"], oof["prob_raw"])
+        self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
+        self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
 
     def test_python_hash_seed_is_exported_before_python_starts(self):
         root = Path(__file__).resolve().parents[1]
