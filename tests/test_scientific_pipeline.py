@@ -200,6 +200,32 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(row["model_net_benefit"], 0.0)
         self.assertIn("model_net_benefit_ci_95_low", row)
 
+    def test_alarm_burden_reports_observed_time_and_refractory_episodes(self):
+        septic_times = list(range(1, 21))
+        frame = pd.DataFrame({
+            "Patient_ID": ["A:p1"] * 20 + ["B:p1"] * 2,
+            "ICULOS": septic_times + [1, 2],
+            "TrueSepsisOnset_ICULOS": [20.0] * 20 + [math.nan] * 2,
+            "probability": [float(hour in {2, 3, 8, 20}) for hour in septic_times] + [1.0, 1.0],
+            "threshold": [0.5] * 22,
+        })
+        summary = pipeline.early_warning_metrics(frame, "probability", "threshold")["summary"]
+        self.assertEqual(summary["n_alarm_episodes"], 4)
+        self.assertEqual(summary["time_in_alert_observed_decision_hours"], 6)
+        self.assertEqual(summary["repeated_alert_rows_suppressed_by_refractory_policy"], 2)
+        self.assertEqual(summary["false_alarm_episodes"], 2)
+        self.assertEqual(summary["post_onset_alarm_episodes"], 1)
+        self.assertAlmostEqual(summary["time_in_alert_fraction_observed"], 6 / 22)
+        self.assertIn("6h refractory", summary["alarm_episode_policy"])
+
+    def test_python_hash_seed_is_exported_before_python_starts(self):
+        root = Path(__file__).resolve().parents[1]
+        entrypoint = (root / "run.sh").read_text(encoding="utf-8")
+        job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
+        self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
+        self.assertIn("PYTHONHASHSEED=20260906", job)
+        self.assertNotIn('os.environ["PYTHONHASHSEED"] =', (root / "src" / "scientific_pipeline.py").read_text(encoding="utf-8"))
+
     def test_ece_definition_is_fixed_equal_width_bins(self):
         y = np.array([0, 1, 1, 0])
         p = np.array([0.1, 0.1, 0.9, 0.9])

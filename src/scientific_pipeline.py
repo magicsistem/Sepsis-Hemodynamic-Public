@@ -711,6 +711,8 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     false_alert_episodes = 0
     repeated_alerts = 0
     post_onset_episodes = 0
+    total_alert_decision_hours = 0
+    total_alarm_episodes = 0
     total_observation_hours = 0.0
     lead_times: list[float] = []
     rows: list[dict[str, Any]] = []
@@ -722,6 +724,8 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
         times = patient["ICULOS"].to_numpy(dtype=float)
         alerts = times[patient[probability_column].to_numpy(dtype=float) >= threshold]
         episodes = alarm_episodes(alerts, policy["refractory_hours"])
+        total_alert_decision_hours += len(alerts)
+        total_alarm_episodes += len(episodes)
         repeated_alerts += max(0, len(alerts) - len(episodes))
         total_observation_hours += float(times[-1] - times[0] + 1)
         eligible: list[float] = []
@@ -749,6 +753,8 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "true_onset_iculos": onset,
             "threshold": threshold,
             "alert_rows": int(len(alerts)),
+            "time_in_alert_observed_decision_hours": int(len(alerts)),
+            "time_in_alert_fraction_observed": len(alerts) / len(times),
             "alarm_episodes": int(len(episodes)),
             "eligible_episodes": int(len(eligible)),
             "first_eligible_alert_iculos": eligible[0] if eligible else math.nan,
@@ -768,6 +774,12 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "post_onset_alarm_episodes": post_onset_episodes,
             "false_alarm_episodes": false_alert_episodes,
             "repeated_alert_rows_suppressed_by_refractory_policy": repeated_alerts,
+            "alarm_episode_policy": f"threshold crossing opens a {policy['refractory_hours']}h refractory episode; subsequent threshold-positive decision hours are suppressed",
+            "n_alarm_episodes": total_alarm_episodes,
+            "time_in_alert_observed_decision_hours": total_alert_decision_hours,
+            "time_in_alert_fraction_observed": total_alert_decision_hours / total_observation_hours if total_observation_hours else math.nan,
+            "mean_alert_decision_hours_per_episode": total_alert_decision_hours / total_alarm_episodes if total_alarm_episodes else math.nan,
+            "alert_decision_hours_per_patient_day": total_alert_decision_hours / (total_observation_hours / 24) if total_observation_hours else math.nan,
             "false_alarm_episodes_per_patient_day": false_alert_episodes / (total_observation_hours / 24) if total_observation_hours else math.nan,
         },
         "patients": rows,
