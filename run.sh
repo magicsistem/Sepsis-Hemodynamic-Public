@@ -20,14 +20,27 @@ if [[ "${1:-}" == "--inside-slurm" ]]; then
 fi
 
 [[ $# -eq 0 ]] || { echo "Usage: bash run.sh" >&2; exit 2; }
-git diff --quiet && git diff --cached --quiet && [[ -z "$(git status --porcelain)" ]] || {
-    echo "FAIL: scientific runs require a clean committed checkout" >&2
-    exit 1
-}
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git diff --quiet && git diff --cached --quiet && [[ -z "$(git status --porcelain)" ]] || {
+        echo "FAIL: scientific runs require a clean committed checkout" >&2
+        exit 1
+    }
+    SOURCE_GIT_COMMIT=$(git rev-parse HEAD)
+    SOURCE_GIT_DIRTY=false
+else
+    [[ -f .source_provenance.json ]] || { echo "FAIL: missing laptop source provenance sidecar" >&2; exit 1; }
+    SOURCE_GIT_COMMIT=$(sed -n 's/.*"git_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' .source_provenance.json)
+    SOURCE_GIT_DIRTY=$(sed -n 's/.*"git_dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' .source_provenance.json)
+    [[ "$SOURCE_GIT_COMMIT" =~ ^[0-9a-f]{40}$ && "$SOURCE_GIT_DIRTY" == false ]] || {
+        echo "FAIL: invalid or dirty laptop source provenance sidecar" >&2
+        exit 1
+    }
+fi
+export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY
 command -v sbatch >/dev/null || { echo "FAIL: sbatch is required; invoke on CEDIA" >&2; exit 1; }
 [[ -f data/raw/archive.zip ]] || { echo "FAIL: data/raw/archive.zip is missing" >&2; exit 1; }
 
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_GIT_COMMIT:0:7}}"
 RUN_DIR="$ROOT/runs/$RUN_ID"
 [[ ! -e "$RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $RUN_DIR" >&2; exit 1; }
 mkdir -p runs logs

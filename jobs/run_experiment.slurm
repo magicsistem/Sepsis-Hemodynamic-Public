@@ -33,4 +33,6 @@ fi
     PROJECT_DIR="$PROJECT_DIR" \
     RUN_ID="$RUN_ID" \
     RUN_DIR="$RUN_DIR" \
+    SOURCE_GIT_COMMIT="$SOURCE_GIT_COMMIT" \
+    SOURCE_GIT_DIRTY="$SOURCE_GIT_DIRTY" \
     bash run.sh --inside-slurm
