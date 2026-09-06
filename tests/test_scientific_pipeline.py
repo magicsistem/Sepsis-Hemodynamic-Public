@@ -385,6 +385,18 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertNotIn("best_method", inspect.getsource(pipeline.model_summary))
         self.assertNotIn("quantile", inspect.getsource(pipeline.calibration_metrics))
 
+    def test_logistic_robustness_reuses_grouped_folds(self):
+        features = pd.DataFrame([
+            {"Patient_ID": f"p{i:02d}", "SourceSet": "A", "ICULOS": 1, "SepsisLabel": i % 2, "TrueSepsisOnset_ICULOS": math.nan,
+             "Age": 40.0 + i, "Hct_last_obs": 30.0 + i, "HR_cv_8h": float(i % 3)}
+            for i in range(20)
+        ])
+        folds = pd.DataFrame({"Patient_ID": features["Patient_ID"], "SepsisLabel": features["SepsisLabel"], "Fold": [i % 5 for i in range(20)]})
+        rows = pipeline.logistic_representation_robustness(features, folds)
+        self.assertEqual([row["model_variant"] for row in rows], ["baseline", "enhanced"])
+        self.assertEqual(rows[0]["split_hash"], rows[1]["split_hash"])
+        self.assertTrue(all(row["classifier"] == "sklearn_SGDClassifier_log_loss_l2" for row in rows))
+
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             existing = Path(directory) / "existing-run"

@@ -23,7 +23,8 @@ from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.metrics import (
     auc,
     average_precision_score,
@@ -32,6 +33,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
@@ -1136,6 +1139,31 @@ def paired_patient_permutation(
     return rows
 
 
+def logistic_representation_robustness(features: pd.DataFrame, folds: pd.DataFrame) -> list[dict[str, Any]]:
+    merged = require_fold_context(features, folds)
+    rows = []
+    for variant in ("baseline", "enhanced"):
+        columns = model_features(merged, variant)
+        probability = np.full(len(merged), np.nan)
+        for fold in sorted(merged["Fold"].unique()):
+            train = merged["Fold"] != fold
+            test = ~train
+            model = make_pipeline(
+                SimpleImputer(strategy="median"), StandardScaler(),
+                SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-4, max_iter=1000, tol=1e-4, random_state=SEED + int(fold)),
+            )
+            model.fit(matrix(merged.loc[train], columns), merged.loc[train, "SepsisLabel"], sgdclassifier__sample_weight=equal_patient_weights(merged.loc[train]))
+            probability[test] = model.predict_proba(matrix(merged.loc[test], columns))[:, 1]
+        if not np.isfinite(probability).all():
+            raise PipelineError("L2 logistic robustness OOF predictions are incomplete")
+        rows.append({
+            "classifier": "sklearn_SGDClassifier_log_loss_l2", "model_variant": variant,
+            "split_hash": stable_hash(folds.to_dict(orient="records")), "feature_column_hash": stable_hash(columns),
+            **discrimination_metrics(merged["SepsisLabel"].to_numpy(dtype=int), probability),
+        })
+    return rows
+
+
 def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str, test_source: str, gpu: dict[str, Any]) -> dict[str, Any]:
     columns = model_features(features, variant)
     train = features[features["SourceSet"] == train_source].copy()
@@ -1322,6 +1350,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         for train_source, test_source in (("A", "B"), ("B", "A"))
     ]
     atomic_csv(pd.DataFrame(transport), run_dir / "transport.csv")
+    atomic_csv(pd.DataFrame(logistic_representation_robustness(features, folds)), run_dir / "classifier_robustness.csv")
     ablations = []
     ablation_definitions = {
         "physiology_measurements_only": "Age, sex, time, unit and explicit process/missingness features removed; native NaN states remain observable",
@@ -1398,6 +1427,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "inference": node("inference.csv", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_patient_permutation", ("paired_patient_permutation_v1", "bh_primary_family_v1")),
         "paired_early_warning": node("paired_early_warning.json", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_early_warning_comparison", ("paired_detection_and_conditional_lead_time_v1",)),
         "transport": node("transport.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:fit_source_transport", ("train_A_test_B_and_train_B_test_A_v1",)),
+        "classifier_robustness": node("classifier_robustness.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:logistic_representation_robustness", ("l2_logistic_sgd_same_grouped_folds_v1",)),
         "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("pre_specified_feature_family_ablations_v1",)),
         "split_stability": node("split_stability.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds+outer_oof", ("repeated_grouped_split_seeds_v1",)),
     }
