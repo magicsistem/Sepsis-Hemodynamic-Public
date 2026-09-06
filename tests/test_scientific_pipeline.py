@@ -48,12 +48,15 @@ class ScientificPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "input.zip"
             with zipfile.ZipFile(archive, "w") as handle:
-                handle.writestr("training_setB/training/p000002.psv", "header\n")
+                handle.writestr("training_setB/training_setB/p000002.psv", "header\n")
                 handle.writestr("Dataset.csv", "historical fallback\n")
                 handle.writestr("training_setA/training/p000001.psv", "header\n")
             psv, inventory = pipeline.archive_inventory(archive)
-            self.assertEqual([member.filename for member in psv], ["training_setA/training/p000001.psv", "training_setB/training/p000002.psv"])
+            self.assertEqual([member.filename for member in psv], ["training_setA/training/p000001.psv", "training_setB/training_setB/p000002.psv"])
             self.assertEqual(inventory["member_count"], 3)
+            self.assertEqual(pipeline.source_and_patient("training_setB/training_setB/p100001.psv"), ("B", "B:p100001"))
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.source_and_patient("training_setB/training/p100001.psv")
             with zipfile.ZipFile(archive, "w") as handle:
                 handle.writestr("Dataset.csv", "only fallback\n")
             with self.assertRaises(pipeline.PipelineError):

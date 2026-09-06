@@ -1,7 +1,7 @@
 # Data contract
 
 `data/raw/archive.zip` must contain official patient PSV files at
-`training_setA/training/p*.psv` or `training_setB/training/p*.psv`. The loader
+`training_setA/training/p*.psv` or `training_setB/training_setB/p*.psv`. The loader
 does not inspect or fall back to aggregate `Dataset.csv`, CSV, or TSV files.
 
 Each PSV must contain exactly the official 40 predictors and `SepsisLabel`.

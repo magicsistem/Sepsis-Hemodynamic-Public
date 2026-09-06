@@ -208,8 +208,9 @@ def canonical_headers(headers: Iterable[str], member_name: str) -> list[str]:
 
 def source_and_patient(member_name: str) -> tuple[str, str]:
     parts = Path(member_name).parts
-    if len(parts) != 3 or parts[1] != "training" or parts[0] not in ("training_setA", "training_setB"):
-        raise PipelineError(f"Unexpected PSV path outside official training sets: {member_name}")
+    expected_directories = {"training_setA": "training", "training_setB": "training_setB"}
+    if len(parts) != 3 or parts[0] not in expected_directories or parts[1] != expected_directories[parts[0]]:
+        raise PipelineError(f"Unexpected PSV path outside validated official training sets: {member_name}")
     stem = Path(parts[2]).stem
     if not stem.startswith("p") or not stem[1:].isdigit():
         raise PipelineError(f"Unexpected official patient filename: {member_name}")
