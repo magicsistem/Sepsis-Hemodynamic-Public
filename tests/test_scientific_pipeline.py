@@ -275,8 +275,12 @@ class ScientificPipelineTests(unittest.TestCase):
         entrypoint = (root / "run.sh").read_text(encoding="utf-8")
         job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
         self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
+        self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
+        self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
         self.assertNotIn('os.environ["PYTHONHASHSEED"] =', (root / "src" / "scientific_pipeline.py").read_text(encoding="utf-8"))
+        production = "\n".join(path.read_text(encoding="utf-8") for directory in (root / "src", root / "scripts") for path in directory.glob("*.py"))
+        self.assertNotIn('filterwarnings("ignore")', production)
 
     def test_ece_definition_is_fixed_equal_width_bins(self):
         y = np.array([0, 1, 1, 0])

@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$ROOT"
 export PYTHONHASHSEED=20260906
+export PYTHONWARNINGS=error
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 SOURCE_SIDECAR="$ROOT/.source_provenance.json"
 
