@@ -60,6 +60,8 @@ FEATURE_POLICY = {
     "sampen": {"window_hours": 24, "m": 2, "r_factor": 0.2, "min_observations": 4},
     "early_warning": {"start_hours_before_onset": 12, "end_hours_before_onset": 1, "refractory_hours": 6},
     "calibration": "pre-specified_platt_nested_inner_oof",
+    "calibration_fit_weighting": "equal total weight per patient",
+    "calibration_patient_cluster_bootstrap_repeats": 300,
     "threshold_grid": tuple(round(x, 2) for x in np.arange(0.05, 1.00, 0.05)),
 }
 
@@ -562,7 +564,7 @@ def fitted_platt(inner_oof: pd.DataFrame) -> LogisticRegression:
     if set(y) != {0, 1}:
         raise PipelineError("Nested calibration requires both classes in inner OOF predictions")
     calibrator = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED)
-    calibrator.fit(inner_oof["inner_prob_raw"].to_numpy(dtype=float).reshape(-1, 1), y)
+    calibrator.fit(inner_oof["inner_prob_raw"].to_numpy(dtype=float).reshape(-1, 1), y, sample_weight=equal_patient_weights(inner_oof))
     return calibrator
 
 
@@ -605,23 +607,52 @@ def challenge_utility(frame: pd.DataFrame, probability_column: str, threshold: f
     return float((observed_total - inaction_total) / denominator)
 
 
-def calibration_metrics(y: np.ndarray, probability: np.ndarray, bins: int = 10) -> dict[str, float]:
+def equal_patient_weights(frame: pd.DataFrame) -> np.ndarray:
+    if "Patient_ID" not in frame:
+        raise PipelineError("Patient-balanced calibration requires Patient_ID")
+    counts = frame.groupby("Patient_ID", sort=False)["Patient_ID"].transform("size").to_numpy(dtype=float)
+    return 1.0 / counts
+
+
+def calibration_metrics(y: np.ndarray, probability: np.ndarray, bins: int = 10, sample_weight: np.ndarray | None = None) -> dict[str, float]:
     probability = np.clip(np.asarray(probability, dtype=float), 1e-6, 1 - 1e-6)
     y = np.asarray(y, dtype=int)
+    weights = np.ones(len(y), dtype=float) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    if len(y) != len(probability) or len(y) != len(weights) or not np.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
+        raise PipelineError("Invalid calibration inputs or weights")
     ece = 0.0
     bin_ids = np.minimum((probability * bins).astype(int), bins - 1)
     for bin_id in range(bins):
         mask = bin_ids == bin_id
-        if mask.any():
-            ece += float(mask.mean() * abs(y[mask].mean() - probability[mask].mean()))
+        weight = weights[mask]
+        if weight.sum() > 0:
+            ece += float(weight.sum() / weights.sum() * abs(np.average(y[mask], weights=weight) - np.average(probability[mask], weights=weight)))
     logit = np.log(probability / (1 - probability)).reshape(-1, 1)
-    model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED).fit(logit, y)
-    return {
-        "brier": float(brier_score_loss(y, probability)),
-        "ece_fixed_10_bins": float(ece),
-        "calibration_intercept": float(model.intercept_[0]),
-        "calibration_slope": float(model.coef_[0, 0]),
-    }
+    model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED).fit(logit, y, sample_weight=weights)
+    return {"brier": float(brier_score_loss(y, probability, sample_weight=weights)), "ece_fixed_10_bins": float(ece), "calibration_intercept": float(model.intercept_[0]), "calibration_slope": float(model.coef_[0, 0])}
+
+
+def calibration_metrics_with_patient_uncertainty(frame: pd.DataFrame, probability_column: str, repeats: int | None = None) -> dict[str, Any]:
+    y = frame["SepsisLabel"].to_numpy(dtype=int)
+    probability = frame[probability_column].to_numpy(dtype=float)
+    point = calibration_metrics(y, probability)
+    repeats = FEATURE_POLICY["calibration_patient_cluster_bootstrap_repeats"] if repeats is None else repeats
+    codes, patients = pd.factorize(frame["Patient_ID"], sort=True)
+    if repeats < 1 or (codes < 0).any() or len(patients) < 2:
+        raise PipelineError("Invalid patient-cluster calibration bootstrap context")
+    rng = np.random.default_rng(SEED)
+    samples = {name: [] for name in point}
+    for _ in range(repeats):
+        weights = rng.multinomial(len(patients), np.full(len(patients), 1 / len(patients)))[codes].astype(float)
+        if set(y[weights > 0]) != {0, 1}:
+            raise PipelineError("Patient-cluster calibration bootstrap draw lacks an outcome class")
+        for name, value in calibration_metrics(y, probability, sample_weight=weights).items():
+            samples[name].append(value)
+    result = {**point, "uncertainty_method": "patient-cluster bootstrap percentile 95% CI", "uncertainty_unit": "patient; row-time calibration estimand preserved within resampled patients", "uncertainty_repeats": int(repeats), "uncertainty_confidence_level": 0.95}
+    for name, values in samples.items():
+        result[f"{name}_ci_95_low"] = float(np.quantile(values, 0.025))
+        result[f"{name}_ci_95_high"] = float(np.quantile(values, 0.975))
+    return result
 
 
 def discrimination_metrics(y: np.ndarray, probability: np.ndarray) -> dict[str, float]:
@@ -838,6 +869,8 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
     y = oof["SepsisLabel"].to_numpy(dtype=int)
     raw = oof["prob_raw"].to_numpy(dtype=float)
     calibrated = oof["prob_platt"].to_numpy(dtype=float)
+    raw_calibration = calibration_metrics_with_patient_uncertainty(oof, "prob_raw")
+    platt_calibration = calibration_metrics_with_patient_uncertainty(oof, "prob_platt")
     metrics = {
         "model_variant": variant,
         "population": "outer-fold held-out rows; patient grouping is retained for inference",
@@ -846,8 +879,8 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
         "n_rows": int(len(oof)),
         "n_patients": int(oof["Patient_ID"].nunique()),
         "n_positive_rows": int(y.sum()),
-        "raw": {**discrimination_metrics(y, raw), **calibration_metrics(y, raw)},
-        "platt_nested": {**discrimination_metrics(y, calibrated), **calibration_metrics(y, calibrated)},
+        "raw": {**discrimination_metrics(y, raw), **raw_calibration},
+        "platt_nested": {**discrimination_metrics(y, calibrated), **platt_calibration},
         "challenge_utility": {
             "raw_at_0_5": challenge_utility(oof, "prob_raw", 0.5),
             "platt_at_0_5": challenge_utility(oof, "prob_platt", 0.5),
@@ -971,7 +1004,7 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
         "n_test_patients": int(test["Patient_ID"].nunique()),
         "nested_train_source_threshold": threshold,
         **discrimination_metrics(y, test["prob_platt"].to_numpy()),
-        **calibration_metrics(y, test["prob_platt"].to_numpy()),
+        **calibration_metrics_with_patient_uncertainty(test, "prob_platt"),
         "challenge_utility_at_nested_train_source_threshold": challenge_utility(test, "prob_platt", threshold),
     }
 

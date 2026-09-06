@@ -202,6 +202,17 @@ class ScientificPipelineTests(unittest.TestCase):
         # Two occupied equal-width bins: .5*|.5-.1| + .5*|.5-.9| = .4.
         self.assertAlmostEqual(pipeline.calibration_metrics(y, p, bins=2)["ece_fixed_10_bins"], 0.4)
 
+    def test_calibration_uncertainty_uses_patient_clusters(self):
+        frame = pd.DataFrame([{"Patient_ID": f"A:p{patient:02d}", "SepsisLabel": patient % 2, "probability": 0.75 if patient % 2 else 0.25} for patient in range(20) for _ in range(1 + patient % 3)])
+        weights = pipeline.equal_patient_weights(frame)
+        totals = pd.DataFrame({"Patient_ID": frame["Patient_ID"], "weight": weights}).groupby("Patient_ID")["weight"].sum()
+        self.assertTrue(np.allclose(totals.to_numpy(), 1.0))
+        report = pipeline.calibration_metrics_with_patient_uncertainty(frame, "probability", repeats=20)
+        self.assertEqual(report["uncertainty_unit"].split(";", 1)[0], "patient")
+        for metric in ("brier", "ece_fixed_10_bins", "calibration_intercept", "calibration_slope"):
+            self.assertLessEqual(report[f"{metric}_ci_95_low"], report[metric])
+            self.assertGreaterEqual(report[f"{metric}_ci_95_high"], report[metric])
+
     def test_gpu_cpu_semantics_do_not_treat_import_as_availability(self):
         state = pipeline.gpu_runtime()
         self.assertIn("available", state)
