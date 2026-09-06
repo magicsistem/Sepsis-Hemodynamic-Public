@@ -1,24 +1,16 @@
-# Results Policy
+# Results policy
 
-The public repository should contain reproducible code, clean execution entrypoints, technical documentation, compact final outputs, and inventories/checksums.
+Only artifacts emitted under an immutable corrected `runs/<run-id>/` directory
+and accepted by its `result_manifest.json` are current scientific outputs.
+They are intentionally ignored by Git because they are large, reproducible run
+products.
 
-## Public Outputs
+`results/` and `external_artifacts/` contain historical evidence. They are not
+accepted as caches, inputs, regression expectations, or sources for reporting.
+No report has a hard-coded metric, threshold, feature count, ECE, or p-value.
 
-The public result directories are:
-
-- `results/statistics/`
-- `results/internal_robustness/`
-- `results/final_tables/`
-- `results/final_figures/`
-
-These directories should contain compact CSV, JSON, Markdown, and PNG files that can be regenerated from the documented workflow.
-
-## Local-Only Material
-
-The manuscript, manuscript-only assets, raw data, harmonized data, feature caches, trained models, OOF predictions, checkpoints, extensive logs, failed runs, and local/HPC scratch artifacts are not public workflow dependencies. If they are referenced for provenance, record them in an inventory with size, checksum, policy, and regeneration notes.
-
-## Regeneration
-
-The public flow starts from `data/raw/archive.zip`, a repository-level reproducibility snapshot derived from the public PhysioNet/Computing in Cardiology Challenge 2019 v1.0.0 training data. The authoritative source remains PhysioNet Challenge 2019 v1.0.0; `archive.zip` is not an official PhysioNet filename or direct download URL. The workflow creates `data/processed/kaggle_harmonized.csv`, runs baseline and enhanced training, builds statistics, builds internal robustness summaries, and writes final compact tables and figures.
-
-LaTeX compilation is a local manuscript smoke test only. It is not a public repository acceptance criterion.
+The experimental report data include OOF predictions with fold provenance,
+nested selection records, metrics, reliability rows, patient event/alarm rows,
+DCA, SourceSet transport, ablations, inference, and the manifest chain.
+Missing or hash-mismatched artifacts cause validation failure, not a partial
+statistics package.

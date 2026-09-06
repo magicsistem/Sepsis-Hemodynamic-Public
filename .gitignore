@@ -2,6 +2,7 @@
 /data/
 /logs/
 /results/
+/runs/
 /checkpoints/
 external_artifacts/logs/
 external_artifacts/results_*/

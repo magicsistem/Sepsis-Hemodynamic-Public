@@ -1,19 +1,15 @@
-# Data Harmonization
+# Data contract
 
-The public workflow expects the repository-level raw-data snapshot at:
+`data/raw/archive.zip` must contain official patient PSV files at
+`training_setA/training/p*.psv` or `training_setB/training/p*.psv`. The loader
+does not inspect or fall back to aggregate `Dataset.csv`, CSV, or TSV files.
 
-```text
-data/raw/archive.zip
-```
+Each PSV must contain exactly the official 40 predictors and `SepsisLabel`.
+Only explicit `HCT`/`Hematocrit` aliases are normalized to the required
+canonical `Hct`; unrecognized fields, duplicate normalized fields, or missing
+fields abort the run. Patient identity is source-qualified (`A:p000001`) to
+prevent collisions between source sets.
 
-This snapshot is derived from the public PhysioNet/Computing in Cardiology Challenge 2019 v1.0.0 training data. The authoritative source remains PhysioNet Challenge 2019 v1.0.0; do not treat `archive.zip` as an official PhysioNet filename or direct download URL.
-
-Run:
-
-```bash
-python src/data/data_harmonization.py \
-  --kaggle_path data/raw/archive.zip \
-  --output_dir data/processed
-```
-
-The harmonizer reads patient-level PSV files when present, skips aggregate CSV/TSV files in that case, preserves `SourceSet` from training set paths when available, and writes `data/processed/kaggle_harmonized.csv`.
+The run manifest records archive SHA-256, ZIP inventory hash, file count, row
+count, patient count, and per-source patient counts. These properties are
+validated before feature construction.

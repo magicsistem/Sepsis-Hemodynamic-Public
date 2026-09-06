@@ -1,86 +1,41 @@
-# Reproducibility
+# Reproducibility contract
 
-This document records the public command sequence for reproducing the compact outputs used by the project workflow.
+The final scientific run is launched only with `bash run.sh` from CEDIA. It
+requires a clean committed checkout, the pinned raw archive, Slurm, and the
+existing CEDIA container. `PYTHONHASHSEED=20260906` is exported before Python
+starts. No package installation or update occurs.
 
-## Input
-
-The public workflow starts from the repository-level raw-data snapshot:
+Each run records UTC time, host, Git SHA and dirty state, command, archive and
+input-inventory hashes, schema and feature policy hashes, fold hash, seed,
+dependency versions, GPU runtime validation, official Utility source hash, and
+hashes for every scientific artifact. The lineage is:
 
 ```text
-data/raw/archive.zip
+raw archive -> harmonized PSV rows -> causal features -> patient folds
+-> nested models/OOF scores -> nested Platt calibration/thresholds
+-> metrics, event analysis, inference, transport, ablations, DCA -> manifest
 ```
 
-This snapshot is derived from the public PhysioNet/Computing in Cardiology Challenge 2019 v1.0.0 training data. It is not an official PhysioNet filename or a direct PhysioNet download link. The authoritative source remains PhysioNet Challenge 2019 v1.0.0, accessible through the official project file tree and documented terminal/AWS download commands:
+The archive loader accepts source-qualified patient PSV files only. It checks
+the official schema, required `Hct`, binary/persistent labels, source identity,
+unique patient/hour rows, and strictly increasing `ICULOS`. It fails closed on
+any violation.
 
-```bash
-wget -r -N -c -np https://physionet.org/files/challenge-2019/1.0.0/
-```
+Features use raw observations for rolling variability and entropy; last
+observation has a 24-hour maximum age. SampEn is canonical `m=2`, `r=0.2 SD`,
+with fewer than four observations undefined and a zero `(m+1)` match recorded
+explicitly. Shannon entropy uses non-negative count probabilities. Static
+predictors are not transformed. SourceSet is provenance only, never a model
+feature.
 
-```bash
-aws s3 sync --no-sign-request s3://physionet-open/challenge-2019/1.0.0/ DESTINATION
-```
+The Challenge Utility evaluator is the unchanged official scorer, pinned in
+`vendor/physionet2019`. It evaluates the shifted persistent Challenge labels;
+it is never labelled a fixed-horizon outcome. Fixed early-warning events use
+the reconstructed onset and the pre-specified useful window `[onset-12h,
+onset-1h]` with a six-hour refractory alarm policy.
 
-## Commands
-
-```bash
-python src/data/data_harmonization.py \
-  --kaggle_path data/raw/archive.zip \
-  --output_dir data/processed
-```
-
-```bash
-python src/training/train_zabihi_cudf.py \
-  --data_dir data/processed \
-  --output_dir results/baseline \
-  --n_jobs 64 \
-  --n_gpus 2 \
-  --stage all
-```
-
-```bash
-python src/training/train_zabihi_cudf.py \
-  --data_dir data/processed \
-  --output_dir results/enhanced \
-  --n_jobs 64 \
-  --n_gpus 2 \
-  --use_hemo \
-  --stage all
-```
-
-```bash
-python scripts/build_statistics.py \
-  --baseline-dir results/baseline \
-  --enhanced-dir results/enhanced \
-  --output-dir results/statistics \
-  --n_bootstrap 2000 \
-  --seed 42
-```
-
-```bash
-python scripts/build_internal_robustness.py \
-  --baseline-dir results/baseline \
-  --enhanced-dir results/enhanced \
-  --statistics-dir results/statistics \
-  --harmonized data/processed/kaggle_harmonized.csv \
-  --output-dir results/internal_robustness \
-  --inventory-dir external_artifacts/inventory
-```
-
-```bash
-python scripts/build_final_outputs.py \
-  --statistics-dir results/statistics \
-  --internal-robustness-dir results/internal_robustness \
-  --baseline-dir results/baseline \
-  --enhanced-dir results/enhanced \
-  --tables-dir results/final_tables \
-  --figures-dir results/final_figures
-```
-
-## Outputs
-
-- `results/statistics/`: metrics, inference tables, validation checks, and statistics manifest.
-- `results/internal_robustness/`: internal robustness summaries by source, subgroup, threshold, and calibration.
-- `results/final_tables/`: final compact CSV tables.
-- `results/final_figures/`: final compact PNG figures.
-
-Utility Score is threshold-dependent and should not be described as a uniform operational improvement. All reported performance is from patient-grouped internal cross-validation on the public PhysioNet/CinC 2019 training split.
+Reported discrimination includes AUROC, sklearn Average Precision, and
+trapezoidal PR-AUC as distinct estimands. Calibration includes Brier, fixed
+10-bin ECE, intercept, slope, and reliability rows. Cluster-respecting paired
+patient permutation tests predefine the AUROC/AP/Brier family; no bootstrap
+sign proportion is presented as a null test.
