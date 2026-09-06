@@ -249,6 +249,8 @@ class ScientificPipelineTests(unittest.TestCase):
         expected = pipeline.average_precision_score(oof["SepsisLabel"], oof["prob_raw"])
         self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
         self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
+        self.assertIn("fold-specific monotone calibrators", summary["platt_nested"]["discrimination_interpretation"])
+        self.assertIn("not a threshold for a final deployable model", summary["operating_policy_interpretation"])
 
     def test_temporal_strata_and_process_ablation_definitions(self):
         frame = pd.DataFrame({
@@ -262,6 +264,15 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(strata[("time_since_icu_admission", "ICULOS_1_6h")]["n_rows"], 4)
         self.assertEqual(strata[("time_relative_to_true_onset", "useful_window_onset_minus_12_to_1h")]["n_rows"], 3)
         self.assertEqual(strata[("time_relative_to_true_onset", "post_onset_0h_plus")]["n_rows"], 0)
+        age_frame = pd.DataFrame({
+            "Patient_ID": ["p1", "p2", "p3", "p4", "p5"],
+            "Age": [49.9, 50.0, 69.9, 70.0, math.nan],
+            "SepsisLabel": [0, 1, 0, 1, 0],
+            "probability": [0.1, 0.8, 0.2, 0.9, 0.3],
+        })
+        age = {row["subgroup"]: row for row in pipeline.age_subgroup_metrics(age_frame, "probability")}
+        self.assertEqual([age[group]["n_rows"] for group in ("<50", "50_to_<70", ">=70", "missing")], [1, 2, 1, 1])
+        self.assertTrue(all(row["subgroup_schema_version"] == "age_v1_left_closed_50_70" for row in age.values()))
 
         features = pipeline.feature_patient(patient_frame(), include_hemodynamics=True)
         process = pipeline.ablation_columns(features, "without_explicit_process")

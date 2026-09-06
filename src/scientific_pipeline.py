@@ -786,6 +786,29 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     }
 
 
+def age_subgroup_metrics(frame: pd.DataFrame, probability_column: str) -> list[dict[str, Any]]:
+    groups = pd.cut(frame["Age"], [-np.inf, 50, 70, np.inf], labels=["<50", "50_to_<70", ">=70"], right=False).astype(object)
+    groups[pd.isna(groups)] = "missing"
+    rows: list[dict[str, Any]] = []
+    for group in ("<50", "50_to_<70", ">=70", "missing"):
+        subset = frame.loc[groups == group]
+        y = subset["SepsisLabel"].to_numpy(dtype=int)
+        probability = subset[probability_column].to_numpy(dtype=float)
+        both_classes = set(y) == {0, 1}
+        rows.append({
+            "subgroup_schema_version": "age_v1_left_closed_50_70",
+            "subgroup": group,
+            "unit": "descriptive row-time performance; no independent-row inference",
+            "n_rows": int(len(subset)),
+            "n_patients": int(subset["Patient_ID"].nunique()),
+            "n_positive_rows": int(y.sum()),
+            "auroc": float(roc_auc_score(y, probability)) if both_classes else math.nan,
+            "average_precision": float(average_precision_score(y, probability)) if both_classes else math.nan,
+            "brier": float(brier_score_loss(y, probability)) if len(y) else math.nan,
+        })
+    return rows
+
+
 def temporal_stratified_metrics(frame: pd.DataFrame, probability_column: str) -> list[dict[str, Any]]:
     times = frame["ICULOS"].to_numpy(dtype=float)
     onset = frame["TrueSepsisOnset_ICULOS"].to_numpy(dtype=float)
@@ -934,7 +957,11 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
         "n_patients": int(oof["Patient_ID"].nunique()),
         "n_positive_rows": int(y.sum()),
         "raw": {**discrimination_metrics(y, raw), **raw_calibration},
-        "platt_nested": {**discrimination_metrics(y, calibrated), **platt_calibration},
+        "platt_nested": {
+            **discrimination_metrics(y, calibrated), **platt_calibration,
+            "discrimination_interpretation": "pooled cross-fit scores use fold-specific monotone calibrators; between-fold ranking may change and is not single-deployment-model discrimination",
+        },
+        "operating_policy_interpretation": "nested fold-specific thresholds are unbiased internal OOF policy evaluation, not a threshold for a final deployable model",
         "challenge_utility": {
             "raw_at_0_5": challenge_utility(oof, "prob_raw", 0.5),
             "platt_at_0_5": challenge_utility(oof, "prob_platt", 0.5),
@@ -954,6 +981,9 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
     if variant in {"baseline", "enhanced"}:
         temporal_path = output_dir / f"{variant}_temporal_strata.csv"
         atomic_csv(pd.DataFrame(temporal_stratified_metrics(oof, "prob_platt")), temporal_path)
+        age_path = output_dir / f"{variant}_age_subgroups.csv"
+        atomic_csv(pd.DataFrame(age_subgroup_metrics(oof, "prob_platt")), age_path)
+        metrics["age_subgroups"] = {"artifact": age_path.name, "schema": "age_v1_left_closed_50_70"}
         metrics["temporal_strata"] = {
             "artifact": temporal_path.name,
             "probability_kind": "platt_nested",
@@ -1289,6 +1319,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "reliability.csv": ("reliability_equal_width_10",),
         "dca.csv": ("patient_level_net_benefit_v1",),
         "temporal_strata.csv": ("time_since_icu_and_true_onset_strata_v1",),
+        "age_subgroups.csv": ("age_v1_left_closed_50_70",),
     }
     reported_products = {}
     for variant, model_node in model_nodes.items():
