@@ -334,6 +334,17 @@ class ScientificPipelineTests(unittest.TestCase):
         # Two occupied equal-width bins: .5*|.5-.1| + .5*|.5-.9| = .4.
         self.assertAlmostEqual(pipeline.calibration_metrics(y, p, bins=2)["ece_fixed_10_bins"], 0.4)
 
+    def test_xgboost_fit_equalizes_patient_total_weight(self):
+        class Recorder:
+            def fit(self, x, y, **kwargs):
+                self.kwargs = kwargs
+                return self
+        frame = pd.DataFrame({"Patient_ID": ["p1", "p1", "p2"], "Age": [1.0, 2.0, 3.0], "SepsisLabel": [0, 0, 1]})
+        model = pipeline.fit_xgb(Recorder(), frame, ["Age"], frame)
+        totals = pd.DataFrame({"Patient_ID": frame["Patient_ID"], "weight": model.kwargs["sample_weight"]}).groupby("Patient_ID")["weight"].sum()
+        self.assertTrue(np.allclose(totals.to_numpy(), 1.0))
+        self.assertTrue(np.allclose(model.kwargs["sample_weight_eval_set"][0], model.kwargs["sample_weight"]))
+
     def test_calibration_uncertainty_uses_patient_clusters(self):
         frame = pd.DataFrame([{"Patient_ID": f"A:p{patient:02d}", "SepsisLabel": patient % 2, "probability": 0.75 if patient % 2 else 0.25} for patient in range(20) for _ in range(1 + patient % 3)])
         weights = pipeline.equal_patient_weights(frame)

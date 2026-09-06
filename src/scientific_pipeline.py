@@ -516,6 +516,16 @@ def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimato
     return xgb.XGBClassifier(**kwargs)
 
 
+def fit_xgb(model: Any, train: pd.DataFrame, columns: list[str], validation: pd.DataFrame | None = None) -> Any:
+    kwargs: dict[str, Any] = {"sample_weight": equal_patient_weights(train), "verbose": False}
+    if validation is not None:
+        kwargs.update({
+            "eval_set": [(matrix(validation, columns), validation["SepsisLabel"])],
+            "sample_weight_eval_set": [equal_patient_weights(validation)],
+        })
+    return model.fit(matrix(train, columns), train["SepsisLabel"], **kwargs)
+
+
 MODEL_CANDIDATES = (
     {"id": "depth3", "max_depth": 3, "learning_rate": 0.05, "min_child_weight": 1, "subsample": 0.8, "colsample_bytree": 0.8},
     {"id": "depth5", "max_depth": 5, "learning_rate": 0.05, "min_child_weight": 1, "subsample": 0.8, "colsample_bytree": 0.8},
@@ -546,7 +556,7 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
             fit = train.loc[patient_mask(train, fit_patients)]
             valid = train.loc[patient_mask(train, valid_patients)]
             model = xgb_model(candidate, split_seed + outer_fold * 100 + candidate_index * 10 + inner_fold, gpu, 600, early_stopping=True)
-            model.fit(matrix(fit, columns), fit["SepsisLabel"], eval_set=[(matrix(valid, columns), valid["SepsisLabel"])], verbose=False)
+            fit_xgb(model, fit, columns, valid)
             score = average_precision_score(valid["SepsisLabel"], model.predict_proba(matrix(valid, columns))[:, 1])
             scores[candidate["id"]].append(float(score))
             rounds[candidate["id"]].append(int(getattr(model, "best_iteration", model.n_estimators - 1)) + 1)
@@ -561,7 +571,7 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
         fit = train.loc[patient_mask(train, fit_patients)]
         valid = train.loc[patient_mask(train, valid_patients)].copy()
         model = xgb_model(winner, split_seed + outer_fold * 1000 + inner_fold, gpu, selected_rounds)
-        model.fit(matrix(fit, columns), fit["SepsisLabel"], verbose=False)
+        fit_xgb(model, fit, columns)
         valid["inner_prob_raw"] = model.predict_proba(matrix(valid, columns))[:, 1]
         valid["InnerFold"] = inner_fold
         inner_rows.append(valid[["Patient_ID", "ICULOS", "SepsisLabel", "inner_prob_raw", "InnerFold"]])
@@ -971,7 +981,7 @@ def outer_oof(
         inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
         threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
         model = xgb_model(candidate, split_seed + int(outer_fold), gpu, selected_rounds)
-        model.fit(matrix(outer_train, columns), outer_train["SepsisLabel"], verbose=False)
+        fit_xgb(model, outer_train, columns)
         outer_test["prob_raw"] = model.predict_proba(matrix(outer_test, columns))[:, 1]
         outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
         outer_test["nested_threshold"] = threshold
@@ -1175,7 +1185,7 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
     inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
     threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
     model = xgb_model(candidate, SEED + 500, gpu, rounds)
-    model.fit(matrix(train, columns), train["SepsisLabel"], verbose=False)
+    fit_xgb(model, train, columns)
     test["prob_platt"] = platt_probabilities(calibrator, model.predict_proba(matrix(test, columns))[:, 1])
     y = test["SepsisLabel"].to_numpy(dtype=int)
     return {
