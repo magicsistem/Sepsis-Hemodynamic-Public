@@ -375,6 +375,35 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("tracked, required raw-data dependency", policy)
         self.assertIn("not claimed to recreate this local repackaging", policy)
 
+    def test_transitive_lineage_rejects_tampered_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.csv"
+            result = root / "result.csv"
+            source.write_text("source\n", encoding="utf-8")
+            result.write_text("result\n", encoding="utf-8")
+            source_hash = pipeline.sha256_file(source)
+            lineage = {
+                "source": {
+                    "kind": "artifact_lineage", "artifact": "source.csv", "sha256": source_hash,
+                    "inputs": {}, "generator": "external_input", "generator_git_commit": "1" * 40,
+                    "definition_ids": ["source_v1"],
+                },
+                "result": {
+                    "kind": "artifact_lineage", "artifact": "result.csv", "sha256": pipeline.sha256_file(result),
+                    "inputs": {"source.csv": source_hash}, "generator": "oracle:transform",
+                    "generator_git_commit": "1" * 40, "definition_ids": ["result_v1"],
+                },
+            }
+            self.assertEqual(pipeline.validate_lineage_nodes(root, lineage), 2)
+            lineage["result"]["inputs"]["source.csv"] = "0" * 64
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.validate_lineage_nodes(root, lineage)
+            lineage["result"]["inputs"]["source.csv"] = source_hash
+            result.write_text("tampered\n", encoding="utf-8")
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.validate_lineage_nodes(root, lineage)
+
     def test_reporting_traceability_and_fail_closed_source_set(self):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.source_and_patient("Dataset.psv")

@@ -1102,6 +1102,40 @@ def artifact_hashes(run_dir: Path) -> dict[str, str]:
     }
 
 
+def validate_lineage_nodes(run_dir: Path, lineage: dict[str, Any]) -> int:
+    nodes: dict[str, dict[str, Any]] = {}
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict) and value.get("kind") == "artifact_lineage":
+            artifact = value.get("artifact")
+            if not isinstance(artifact, str) or artifact in nodes:
+                raise PipelineError("Lineage contains an invalid or duplicate artifact")
+            nodes[artifact] = value
+        elif isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+
+    collect(lineage)
+    if not nodes:
+        raise PipelineError("Lineage contains no artifact nodes")
+    required = {"artifact", "sha256", "inputs", "generator", "generator_git_commit", "definition_ids"}
+    for artifact, node in nodes.items():
+        if missing := required.difference(node):
+            raise PipelineError(f"Lineage node {artifact} missing {sorted(missing)}")
+        artifact_path = Path(artifact)
+        if not artifact_path.is_absolute():
+            artifact_path = run_dir / artifact_path
+        if not artifact_path.is_file() or sha256_file(artifact_path) != node["sha256"]:
+            raise PipelineError(f"Lineage artifact hash mismatch: {artifact}")
+        commit = node["generator_git_commit"]
+        if not node["generator"] or not isinstance(commit, str) or len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit) or not node["definition_ids"] or not isinstance(node["inputs"], dict):
+            raise PipelineError(f"Lineage node lacks semantic provenance: {artifact}")
+        for input_artifact, input_sha256 in node["inputs"].items():
+            if input_artifact not in nodes or nodes[input_artifact]["sha256"] != input_sha256:
+                raise PipelineError(f"Lineage input is missing or mismatched: {artifact} <- {input_artifact}")
+    return len(nodes)
+
+
 def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
     manifest_path = run_dir / "result_manifest.json"
     if not manifest_path.is_file():
@@ -1112,6 +1146,7 @@ def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
     }
     if missing := required.difference(manifest):
         raise PipelineError(f"Result manifest missing required fields: {sorted(missing)}")
+    validate_lineage_nodes(run_dir, manifest["lineage"])
     errors = []
     for relative, expected_hash in manifest["artifact_sha256"].items():
         path = run_dir / relative
@@ -1220,13 +1255,64 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "technical_evidence": "nested grouped validation, provenance, and fail-closed gates are machine-checked; editorial appraisal remains author/reviewer work.",
     }
     atomic_json(run_dir / "probast_ai_status.json", probast)
+    def node(artifact: str, inputs: dict[str, str], generator: str, definition_ids: tuple[str, ...]) -> dict[str, Any]:
+        artifact_path = Path(artifact)
+        if not artifact_path.is_absolute():
+            artifact_path = run_dir / artifact_path
+        return {
+            "kind": "artifact_lineage",
+            "artifact": artifact,
+            "sha256": sha256_file(artifact_path),
+            "inputs": inputs,
+            "generator": generator,
+            "generator_git_commit": runtime["git_commit"],
+            "definition_ids": list(definition_ids),
+        }
+
+    raw_artifact = str(archive.resolve())
+    raw_node = node(raw_artifact, {}, "external_input", ("physionet_cinc_2019_local_repackaging",))
+    harmonized_node = node("harmonized.csv", {raw_artifact: raw_node["sha256"]}, "src.scientific_pipeline:harmonize_archive", ("official_40_predictor_schema_v1", "challenge_shifted_persistent_label"))
+    features_node = node("features.csv", {"harmonized.csv": harmonized_node["sha256"]}, "src.scientific_pipeline:build_features", ("causal_feature_policy_v1",))
+    folds_node = node("folds.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds", ("stratified_group_kfold_patient_v1",))
+    model_nodes = {
+        variant: node(
+            f"{variant}_oof_predictions.csv",
+            {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]},
+            "src.scientific_pipeline:outer_oof",
+            ("nested_model_selection_v1", "nested_platt_calibration_v1", "nested_utility_threshold_v1"),
+        )
+        for variant in ("baseline", "enhanced")
+    }
+    product_definitions = {
+        "metrics.json": ("auroc_sklearn", "average_precision_sklearn", "trapezoidal_pr_auc", "official_physionet_2019_utility", "ece_equal_width_10", "brier", "calibration_intercept_slope"),
+        "early_warning_patients.csv": ("onset_anchored_early_warning_12_to_1h", "alarm_refractory_6h"),
+        "reliability.csv": ("reliability_equal_width_10",),
+        "dca.csv": ("patient_level_net_benefit_v1",),
+        "temporal_strata.csv": ("time_since_icu_and_true_onset_strata_v1",),
+    }
+    reported_products = {}
+    for variant, model_node in model_nodes.items():
+        for suffix, definitions in product_definitions.items():
+            artifact = f"{variant}_{suffix}"
+            reported_products[artifact] = node(artifact, {model_node["artifact"]: model_node["sha256"]}, "src.scientific_pipeline:model_summary", definitions)
+    combined_metrics_node = node("metrics.json", {f"{variant}_metrics.json": reported_products[f"{variant}_metrics.json"]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:run_scientific_pipeline", ("combined_current_run_metrics_v1",))
+    reported_products["metrics.json"] = combined_metrics_node
+    statistics_nodes = {
+        "inference": node("inference.csv", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_patient_permutation", ("paired_patient_permutation_v1", "bh_primary_family_v1")),
+        "transport": node("transport.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:fit_source_transport", ("train_A_test_B_and_train_B_test_A_v1",)),
+        "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("pre_specified_feature_family_ablations_v1",)),
+        "split_stability": node("split_stability.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds+outer_oof", ("repeated_grouped_split_seeds_v1",)),
+    }
+    probast_node = node("probast_ai_status.json", {name["artifact"]: name["sha256"] for name in statistics_nodes.values()}, "src.scientific_pipeline:run_scientific_pipeline", ("probast_ai_not_low_risk_until_independent_review",))
     lineage = {
-        "raw_data": {"artifact": str(archive), "sha256": runtime["data_archive_sha256"]},
-        "harmonized": stages["harmonized"],
-        "features": stages["features"],
-        "folds": stages["folds"],
-        "models_oof_calibration": {variant: stages[variant] for variant in ("baseline", "enhanced")},
-        "statistics": {"inference": "inference.csv", "transport": "transport.csv", "ablations": "ablations.csv", "split_stability": "split_stability.csv"},
+        "raw_data": raw_node,
+        "harmonized": harmonized_node,
+        "features": features_node,
+        "folds": folds_node,
+        "models_oof_calibration": model_nodes,
+        "reported_products": reported_products,
+        "statistics": statistics_nodes,
+        "probast_ai": probast_node,
     }
     initial = {
         "runtime": runtime,
