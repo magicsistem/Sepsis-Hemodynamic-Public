@@ -13,13 +13,23 @@ if [[ "${1:-}" == "--inside-slurm" ]]; then
     [[ -n "${RUN_ID:-}" ]] || { echo "FAIL: RUN_ID is required" >&2; exit 1; }
     [[ -n "${RUN_DIR:-}" ]] || { echo "FAIL: RUN_DIR is required" >&2; exit 1; }
     python -m unittest discover -s tests -v
+    if [[ "${RUN_TESTS_ONLY:-false}" == true ]]; then
+        printf 'TEST_SUITE_PASS run_id=%s\n' "$RUN_ID"
+        exit 0
+    fi
     python scripts/run_experiment.py --archive data/raw/archive.zip --run-id "$RUN_ID" --run-dir "$RUN_DIR"
     python scripts/run_experiment.py --validate-only --run-id "$RUN_ID" --run-dir "$RUN_DIR"
     printf 'SCIENTIFIC_RUN_PASS run_id=%s run_dir=%s\n' "$RUN_ID" "$RUN_DIR"
     exit 0
 fi
 
-[[ $# -eq 0 ]] || { echo "Usage: bash run.sh" >&2; exit 2; }
+TESTS_ONLY=false
+if [[ $# -eq 1 && "${1:-}" == "--tests" ]]; then
+    TESTS_ONLY=true
+elif [[ $# -ne 0 ]]; then
+    echo "Usage: bash run.sh [--tests]" >&2
+    exit 2
+fi
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git diff --quiet && git diff --cached --quiet && [[ -z "$(git status --porcelain)" ]] || {
         echo "FAIL: scientific runs require a clean committed checkout" >&2
@@ -44,7 +54,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_GIT_COMMIT:0:7}}"
 RUN_DIR="$ROOT/runs/$RUN_ID"
 [[ ! -e "$RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $RUN_DIR" >&2; exit 1; }
 mkdir -p runs logs
-JOB_ID=$(sbatch --parsable --export=ALL,PROJECT_DIR="$ROOT",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR" jobs/run_experiment.slurm)
+JOB_ID=$(sbatch --parsable --export=ALL,PROJECT_DIR="$ROOT",RUN_ID="$RUN_ID",RUN_DIR="$RUN_DIR",RUN_TESTS_ONLY="$TESTS_ONLY" jobs/run_experiment.slurm)
 printf 'Submitted scientific run %s (Slurm job %s)\n' "$RUN_ID" "$JOB_ID"
 
 while squeue -h -j "$JOB_ID" | grep -q .; do
@@ -52,4 +62,8 @@ while squeue -h -j "$JOB_ID" | grep -q .; do
 done
 STATE=$(sacct -n -X -j "$JOB_ID" --format=State --parsable2 | sed -n '1p' | tr -d '[:space:]')
 [[ "$STATE" == COMPLETED ]] || { echo "FAIL: Slurm job $JOB_ID ended as ${STATE:-unknown}; inspect logs/run-${JOB_ID}.out and .err" >&2; exit 1; }
-printf 'SCIENTIFIC_RUN_PASS run_id=%s job_id=%s run_dir=%s\n' "$RUN_ID" "$JOB_ID" "$RUN_DIR"
+if [[ "$TESTS_ONLY" == true ]]; then
+    printf 'TEST_SUITE_PASS run_id=%s job_id=%s\n' "$RUN_ID" "$JOB_ID"
+else
+    printf 'SCIENTIFIC_RUN_PASS run_id=%s job_id=%s run_dir=%s\n' "$RUN_ID" "$JOB_ID" "$RUN_DIR"
+fi
