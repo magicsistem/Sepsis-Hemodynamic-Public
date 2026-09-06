@@ -28,6 +28,18 @@ else
     exit 1
 fi
 
+printf 'CEDIA_ENVIRONMENT_BEGIN\n'
+hostname
+uname -a
+python --version
+nvidia-smi
+which python
+which sbatch
+which squeue
+git --version
+"$RUNTIME" --version
+printf 'CEDIA_ENVIRONMENT_END\n'
+
 "$RUNTIME" exec --nv "$CONTAINER" env \
     PYTHONHASHSEED=20260906 \
     PROJECT_DIR="$PROJECT_DIR" \
