@@ -430,9 +430,9 @@ def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     # administrative provenance and is never a model input.
     excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS"}
     columns = [column for column in frame.columns if column not in excluded and not column.endswith("_sampen_effective_n_24h")]
-    hemodynamic = [column for column in columns if any(column.startswith(f"{signal}_") for signal in HEMODYNAMIC_COLUMNS)]
+    enhanced_only = [column for column in columns if column.endswith(("_cv_8h", "_iqr_8h", "_sampen_24h", "_sampen_24h_zero_match"))]
     if variant == "baseline":
-        columns = [column for column in columns if column not in hemodynamic]
+        columns = [column for column in columns if column not in enhanced_only]
     elif variant != "enhanced":
         raise PipelineError(f"Unknown model variant: {variant}")
     if not columns or "Hct_last_obs" not in columns:

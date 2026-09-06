@@ -393,6 +393,9 @@ class ScientificPipelineTests(unittest.TestCase):
         columns = pipeline.model_features(features, "enhanced")
         self.assertNotIn("HR", columns)
         self.assertIn("HR_last_obs", columns)
+        baseline = pipeline.model_features(features, "baseline")
+        self.assertIn("HR_last_obs", baseline)
+        self.assertNotIn("HR_cv_8h", baseline)
         self.assertNotIn("best_method", inspect.getsource(pipeline.model_summary))
         self.assertNotIn("quantile", inspect.getsource(pipeline.calibration_metrics))
 
