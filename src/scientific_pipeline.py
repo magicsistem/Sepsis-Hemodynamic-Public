@@ -375,6 +375,8 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
     for column in DYNAMIC_COLUMNS:
         raw = pd.to_numeric(patient[column], errors="coerce")
         engineered[f"{column}_is_missing"] = raw.isna().to_numpy(dtype="int8")
+        observed_at = times.where(raw.notna()).ffill()
+        engineered[f"{column}_observation_age_hours"] = (times - observed_at).to_numpy()
         engineered[f"{column}_last_obs"] = causal_last_observation(
             raw, times, FEATURE_POLICY["last_observation_max_age_hours"]
         ).to_numpy()
@@ -1130,7 +1132,7 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
 
 def ablation_columns(frame: pd.DataFrame, name: str) -> list[str]:
     columns = model_features(frame, "enhanced")
-    explicit_process = tuple(column for column in columns if column.endswith("_is_missing")) + (
+    explicit_process = tuple(column for column in columns if column.endswith(("_is_missing", "_observation_age_hours"))) + (
         "Unit1", "Unit2", "HospAdmTime", "ICULOS", "Measurement_Count",
     )
     removals = {
@@ -1138,7 +1140,7 @@ def ablation_columns(frame: pd.DataFrame, name: str) -> list[str]:
         "without_explicit_process": explicit_process,
         "without_iculos": ("ICULOS",),
         "without_hosp_adm_time": ("HospAdmTime",),
-        "without_explicit_missingness_indicators": tuple(column for column in columns if column.endswith("_is_missing")) + ("Measurement_Count",),
+        "without_explicit_missingness_indicators": tuple(column for column in columns if column.endswith(("_is_missing", "_observation_age_hours"))) + ("Measurement_Count",),
         "without_cv": tuple(column for column in columns if "_cv_" in column),
         "without_iqr": tuple(column for column in columns if "_iqr_" in column),
         "without_sampen": tuple(column for column in columns if "_sampen_" in column),

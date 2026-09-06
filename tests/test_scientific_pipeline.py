@@ -141,6 +141,7 @@ class ScientificPipelineTests(unittest.TestCase):
         patient["HR"] = [80.0, np.nan, np.nan, 83.0]
         features = pipeline.feature_patient(patient, include_hemodynamics=True)
         self.assertEqual(features["HR_last_obs"].tolist(), [80.0, 80.0, 80.0, 83.0])
+        self.assertEqual(features["HR_observation_age_hours"].tolist(), [0.0, 1.0, 2.0, 0.0])
         self.assertEqual(features["HR_sampen_effective_n_24h"].tolist(), [1, 1, 1, 2])
         self.assertTrue(features["HR_sampen_24h"].isna().all())
         self.assertNotIn("HR_sampen_effective_n_24h", pipeline.model_features(features, "enhanced"))
@@ -291,7 +292,7 @@ class ScientificPipelineTests(unittest.TestCase):
         process = pipeline.ablation_columns(features, "without_explicit_process")
         physiology = pipeline.ablation_columns(features, "physiology_measurements_only")
         for columns in (process, physiology):
-            self.assertFalse(any(column.endswith("_is_missing") for column in columns))
+            self.assertFalse(any(column.endswith(("_is_missing", "_observation_age_hours")) for column in columns))
             self.assertTrue({"Unit1", "Unit2", "HospAdmTime", "ICULOS", "Measurement_Count"}.isdisjoint(columns))
             self.assertIn("HR_last_obs", columns)
         self.assertTrue({"Age", "Gender"}.issubset(process))
