@@ -4,10 +4,10 @@ OWNS: run.sh, jobs/**, scripts/**, src/**, tests/**, docs/**, README.md, MANIFES
 
 Scope: Replace the audited public pipeline with one scientifically valid, fail-closed, reproducible experiment, while retaining every unresolved human or external-data limitation visibly.
 
-- [ ] G1: the private exhaustive finding ledger is excluded from Git and has one row for every audit finding
+- [x] G1: the private exhaustive finding ledger is excluded from Git and has one row for every audit finding
   CHECK: test -f EXPERIMENT_PROGRESS.md && git check-ignore -q EXPERIMENT_PROGRESS.md && test "$(awk '/^\| (B|F|M)[0-9]/{n++} END{print n+0}' EXPERIMENT_PROGRESS.md)" -eq 234 && node -e "setTimeout(() => console.log('finding-ledger-verification-passed'), 20)"
   EXPECT: finding-ledger-verification-passed
-  EVIDENCE: pending
+  EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
   EVIDENCE: pending
