@@ -790,6 +790,38 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     }
 
 
+def paired_early_warning_comparison(baseline: pd.DataFrame, enhanced: pd.DataFrame) -> dict[str, Any]:
+    key = ["Patient_ID", "ICULOS", "SepsisLabel", "Fold"]
+    base = baseline.sort_values(key).reset_index(drop=True)
+    enh = enhanced.sort_values(key).reset_index(drop=True)
+    if not base[key].equals(enh[key]):
+        raise PipelineError("Paired early-warning comparison requires aligned OOF rows")
+    patient_tables = []
+    for name, frame in (("baseline", base), ("enhanced", enh)):
+        rows = pd.DataFrame(early_warning_metrics(frame, "prob_platt", "nested_threshold")["patients"])
+        rows = rows.loc[rows["septic"], ["Patient_ID", "true_onset_iculos", "first_eligible_alert_iculos"]]
+        rows[f"{name}_lead_time_hours"] = rows["true_onset_iculos"] - rows.pop("first_eligible_alert_iculos")
+        patient_tables.append(rows.drop(columns="true_onset_iculos") if name == "enhanced" else rows)
+    paired = patient_tables[0].merge(patient_tables[1], on="Patient_ID", validate="one_to_one")
+    both = paired.dropna(subset=["baseline_lead_time_hours", "enhanced_lead_time_hours"])
+    differences = both["enhanced_lead_time_hours"] - both["baseline_lead_time_hours"]
+    ci = bootstrap_ci(differences.to_numpy()) if len(differences) else (math.nan, math.nan)
+    return {
+        "estimand": "paired lead-time difference among septic patients detected by both models inside the fixed onset-12h to onset-1h window",
+        "n_septic_patients": int(len(paired)),
+        "baseline_detected": int(paired["baseline_lead_time_hours"].notna().sum()),
+        "enhanced_detected": int(paired["enhanced_lead_time_hours"].notna().sum()),
+        "detected_by_both": int(len(both)),
+        "baseline_only": int((paired["baseline_lead_time_hours"].notna() & paired["enhanced_lead_time_hours"].isna()).sum()),
+        "enhanced_only": int((paired["baseline_lead_time_hours"].isna() & paired["enhanced_lead_time_hours"].notna()).sum()),
+        "missed_by_both": int(paired[["baseline_lead_time_hours", "enhanced_lead_time_hours"]].isna().all(axis=1).sum()),
+        "median_enhanced_minus_baseline_lead_time_hours_among_both": float(np.median(differences)) if len(differences) else math.nan,
+        "paired_bootstrap_ci_95_low": ci[0],
+        "paired_bootstrap_ci_95_high": ci[1],
+        "interpretation": "Detection counts retain missed patients; timing is secondary and conditional on detection by both models.",
+    }
+
+
 def measurement_support_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     times = frame["ICULOS"]
@@ -1282,6 +1314,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         raise PipelineError("Baseline/enhanced OOF identity mismatch")
     inference = paired_patient_permutation(oofs["baseline"], oofs["enhanced"], "prob_platt")
     atomic_csv(pd.DataFrame(inference), run_dir / "inference.csv")
+    atomic_json(run_dir / "paired_early_warning.json", paired_early_warning_comparison(oofs["baseline"], oofs["enhanced"]))
     transport = [
         fit_source_transport(features, variant, train_source, test_source, gpu)
         for variant in ("baseline", "enhanced")
@@ -1362,6 +1395,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     reported_products["metrics.json"] = combined_metrics_node
     statistics_nodes = {
         "inference": node("inference.csv", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_patient_permutation", ("paired_patient_permutation_v1", "bh_primary_family_v1")),
+        "paired_early_warning": node("paired_early_warning.json", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_early_warning_comparison", ("paired_detection_and_conditional_lead_time_v1",)),
         "transport": node("transport.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:fit_source_transport", ("train_A_test_B_and_train_B_test_A_v1",)),
         "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("pre_specified_feature_family_ablations_v1",)),
         "split_stability": node("split_stability.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds+outer_oof", ("repeated_grouped_split_seeds_v1",)),

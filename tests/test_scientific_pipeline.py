@@ -244,6 +244,21 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertTrue(math.isnan(remote_summary["median_lead_time_hours"]))
         self.assertEqual(remote_summary["false_alarm_episodes"], 1)
 
+    def test_paired_lead_time_keeps_detection_denominators(self):
+        rows = []
+        for patient in ("p1", "p2"):
+            for hour in range(1, 5):
+                rows.append({"Patient_ID": patient, "ICULOS": hour, "SepsisLabel": 0, "Fold": 0, "TrueSepsisOnset_ICULOS": 5.0, "nested_threshold": 0.5})
+        baseline = pd.DataFrame(rows)
+        enhanced = baseline.copy()
+        baseline["prob_platt"] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        enhanced["prob_platt"] = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        comparison = pipeline.paired_early_warning_comparison(baseline, enhanced)
+        self.assertEqual((comparison["baseline_detected"], comparison["enhanced_detected"]), (2, 1))
+        self.assertEqual((comparison["detected_by_both"], comparison["baseline_only"], comparison["missed_by_both"]), (1, 1, 0))
+        self.assertEqual(comparison["median_enhanced_minus_baseline_lead_time_hours_among_both"], -1.0)
+        self.assertIn("conditional on detection by both", comparison["interpretation"])
+
     def test_reporting_writes_metrics_from_supplied_oof(self):
         rows = []
         for patient in range(40):
