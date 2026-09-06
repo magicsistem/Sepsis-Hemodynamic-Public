@@ -479,6 +479,9 @@ class ScientificPipelineTests(unittest.TestCase):
                     os.environ["PYTHONHASHSEED"] = previous
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.validate_final_manifest(existing)
+            source = inspect.getsource(pipeline.validate_final_manifest)
+            self.assertIn("COMPUTATIONAL_RUN_VALIDATED", source)
+            self.assertIn('final_validation"].get("status") != "PASS"', source)
 
     def test_nested_calibration_and_threshold_provenance(self):
         inner = pd.DataFrame({

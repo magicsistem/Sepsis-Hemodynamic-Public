@@ -1306,7 +1306,7 @@ def validate_lineage_nodes(run_dir: Path, lineage: dict[str, Any]) -> int:
     return len(nodes)
 
 
-def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
+def validate_final_manifest(run_dir: Path, allow_pending: bool = False) -> dict[str, Any]:
     manifest_path = run_dir / "result_manifest.json"
     if not manifest_path.is_file():
         raise PipelineError("Final result manifest is missing")
@@ -1316,6 +1316,11 @@ def validate_final_manifest(run_dir: Path) -> dict[str, Any]:
     }
     if missing := required.difference(manifest):
         raise PipelineError(f"Result manifest missing required fields: {sorted(missing)}")
+    expected_status = "PENDING_FINAL_VALIDATION" if allow_pending else "COMPUTATIONAL_RUN_VALIDATED"
+    if manifest["scientific_status"] != expected_status:
+        raise PipelineError(f"Result manifest has invalid scientific status: {manifest['scientific_status']}")
+    if not allow_pending and manifest["final_validation"].get("status") != "PASS":
+        raise PipelineError("Final manifest has not passed final validation")
     validate_lineage_nodes(run_dir, manifest["lineage"])
     errors = []
     for relative, expected_hash in manifest["artifact_sha256"].items():
@@ -1554,7 +1559,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "final_validation": {"status": "PENDING"},
     }
     atomic_json(run_dir / "result_manifest.json", initial)
-    validation = validate_final_manifest(run_dir)
+    validation = validate_final_manifest(run_dir, allow_pending=True)
     final = {**initial, "scientific_status": "COMPUTATIONAL_RUN_VALIDATED", "final_validation": validation}
     # The manifest changes after its own hash inventory. It intentionally does
     # not self-hash; every scientific result artifact is covered above.
