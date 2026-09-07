@@ -273,7 +273,7 @@ class ScientificPipelineTests(unittest.TestCase):
         rows = []
         for patient in ("p1", "p2"):
             for hour in range(1, 5):
-                rows.append({"Patient_ID": patient, "ICULOS": hour, "SepsisLabel": 0, "Fold": 0, "TrueSepsisOnset_ICULOS": 5.0, "nested_threshold": 0.5})
+                rows.append({"Patient_ID": patient, "ICULOS": hour, "SepsisLabel": int(hour >= 3), "Fold": 0, "TrueSepsisOnset_ICULOS": 5.0, "nested_threshold": 0.5})
         baseline = pd.DataFrame(rows)
         enhanced = baseline.copy()
         baseline["prob_platt"] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
