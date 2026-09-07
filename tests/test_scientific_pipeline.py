@@ -32,8 +32,9 @@ def patient_frame(hours=(1, 2, 3, 4), labels=(0, 0, 0, 0)) -> pd.DataFrame:
     frame = pd.DataFrame(values)
     frame.insert(0, "Patient_ID", "A:p000001")
     frame.insert(1, "SourceSet", "A")
-    first_positive = np.flatnonzero(frame["SepsisLabel"].to_numpy(dtype=int))
-    frame["TrueSepsisOnset_ICULOS"] = frame.loc[first_positive[0], "ICULOS"] + 6 if len(first_positive) else np.nan
+    onset, onset_status = pipeline.reconstruct_true_onset(frame["SepsisLabel"], frame["ICULOS"])
+    frame["TrueSepsisOnset_ICULOS"] = onset
+    frame["OnsetReconstructionStatus"] = onset_status
     return frame
 
 
@@ -78,6 +79,19 @@ class ScientificPipelineTests(unittest.TestCase):
         invalid_label.loc[3, "SepsisLabel"] = 0
         with self.assertRaises(pipeline.PipelineError):
             pipeline.validate_patient_frame(invalid_label, "p000001.psv")
+
+    def test_left_censored_sepsis_is_not_assigned_false_onset(self):
+        patient = patient_frame(labels=(1, 1, 1, 1))
+        onset, status = pipeline.reconstruct_true_onset([0, 1, 1], [1, 2, 3])
+        self.assertEqual((onset, status), (8.0, "exact_from_shift_transition"))
+        self.assertTrue(patient["TrueSepsisOnset_ICULOS"].isna().all())
+        self.assertEqual(patient["OnsetReconstructionStatus"].unique().tolist(), ["septic_onset_left_censored"])
+        patient["probability"] = 1.0
+        patient["threshold"] = 0.5
+        summary = pipeline.early_warning_metrics(patient, "probability", "threshold")["summary"]
+        self.assertEqual((summary["n_septic_patients"], summary["n_nonseptic_patients"]), (1, 0))
+        self.assertEqual((summary["n_onset_eligible_septic_patients"], summary["n_left_censored_septic_patients_excluded_from_onset_estimands"]), (0, 1))
+        self.assertTrue(math.isnan(summary["useful_early_alert_sensitivity"]))
 
     def test_patient_isolation_and_fold_provenance(self):
         patients = []
@@ -292,7 +306,7 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(summary["prevalence_only_brier_reference"], np.mean(oof["SepsisLabel"]) * (1 - np.mean(oof["SepsisLabel"])))
         composition = summary["positive_label_composition"]
         self.assertEqual((composition["pre_onset_rows"], composition["onset_or_post_onset_rows"]), (20, 20))
-        self.assertEqual(composition["pre_onset_rows"] + composition["onset_or_post_onset_rows"], summary["n_positive_rows"])
+        self.assertEqual(composition["pre_onset_rows"] + composition["onset_or_post_onset_rows"] + composition["left_censored_onset_unidentifiable_rows"], summary["n_positive_rows"])
         self.assertIn("not equivalent", composition["interpretation"])
         self.assertIn("fold-specific monotone calibrators", summary["platt_nested"]["discrimination_interpretation"])
         self.assertIn("not a threshold for a final deployable model", summary["operating_policy_interpretation"])

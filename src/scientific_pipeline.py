@@ -248,6 +248,17 @@ def validate_patient_frame(frame: pd.DataFrame, member_name: str) -> pd.DataFram
     return frame
 
 
+def reconstruct_true_onset(labels: Iterable[int], times: Iterable[float]) -> tuple[float, str]:
+    label_array = np.asarray(list(labels), dtype=int)
+    time_array = np.asarray(list(times), dtype=float)
+    first_positive = np.flatnonzero(label_array)
+    if not len(first_positive):
+        return math.nan, "nonseptic"
+    if first_positive[0] == 0:
+        return math.nan, "septic_onset_left_censored"
+    return float(time_array[first_positive[0]] + 6), "exact_from_shift_transition"
+
+
 def archive_inventory(archive: Path) -> tuple[list[zipfile.ZipInfo], dict[str, Any]]:
     with zipfile.ZipFile(archive) as zf:
         members = sorted((info for info in zf.infolist() if not info.is_dir()), key=lambda info: info.filename)
@@ -279,11 +290,9 @@ def harmonize_archive(archive: Path, output: Path) -> dict[str, Any]:
             frame.insert(1, "SourceSet", source)
             for column in PREDICTOR_COLUMNS + ("SepsisLabel",):
                 frame[column] = pd.to_numeric(frame[column], errors="coerce")
-            labels = frame["SepsisLabel"].to_numpy(dtype=int)
-            first_positive = np.flatnonzero(labels)
-            frame["TrueSepsisOnset_ICULOS"] = (
-                float(frame.iloc[first_positive[0]]["ICULOS"] + 6) if len(first_positive) else np.nan
-            )
+            onset, onset_status = reconstruct_true_onset(frame["SepsisLabel"], frame["ICULOS"])
+            frame["TrueSepsisOnset_ICULOS"] = onset
+            frame["OnsetReconstructionStatus"] = onset_status
             frames.append(frame)
     harmonized = pd.concat(frames, ignore_index=True).sort_values(
         ["SourceSet", "Patient_ID", "ICULOS"], kind="mergesort"
@@ -372,7 +381,7 @@ def causal_sampen(series: pd.Series, times: pd.Series) -> pd.Series:
 def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.DataFrame:
     patient = patient.sort_values("ICULOS", kind="mergesort").copy()
     times = patient["ICULOS"]
-    identity = patient[["Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS"]].copy()
+    identity = patient[["Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus"]].copy()
     engineered: dict[str, Any] = {column: patient[column].to_numpy() for column in STATIC_COLUMNS}
     engineered["Measurement_Count"] = patient.loc[:, DYNAMIC_COLUMNS].notna().sum(axis=1).to_numpy(dtype="int16")
     for column in DYNAMIC_COLUMNS:
@@ -401,7 +410,7 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
 
 def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
     frame = pd.read_csv(harmonized)
-    required = {"Patient_ID", "SourceSet", *CHALLENGE_COLUMNS, "TrueSepsisOnset_ICULOS"}
+    required = {"Patient_ID", "SourceSet", *CHALLENGE_COLUMNS, "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus"}
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise PipelineError(f"Harmonized artifact is invalid; missing {missing}")
@@ -428,7 +437,7 @@ def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
 def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     # ICULOS is an observed official predictor, not an identifier. SourceSet is
     # administrative provenance and is never a model input.
-    excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS"}
+    excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus"}
     columns = [column for column in frame.columns if column not in excluded and not column.endswith("_sampen_effective_n_24h")]
     enhanced_only = [column for column in columns if column.endswith(("_cv_8h", "_iqr_8h", "_sampen_24h", "_sampen_24h_zero_match"))]
     if variant == "baseline":
@@ -722,6 +731,7 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     patients = 0
     septic = 0
     nonseptic = 0
+    onset_unidentifiable_septic = 0
     true_positive_patients = 0
     false_negative_patients = 0
     false_alert_episodes = 0
@@ -745,7 +755,9 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
         repeated_alerts += max(0, len(alerts) - len(episodes))
         total_observation_hours += float(times[-1] - times[0] + 1)
         eligible: list[float] = []
-        if math.isfinite(onset):
+        is_septic = bool(patient["SepsisLabel"].max())
+        onset_eligible = is_septic and math.isfinite(onset)
+        if onset_eligible:
             septic += 1
             lower = onset - policy["start_hours_before_onset"]
             upper = onset - policy["end_hours_before_onset"]
@@ -759,13 +771,18 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             else:
                 false_negative_patients += 1
                 status = "FN_patient_no_useful_window_alert"
+        elif is_septic:
+            septic += 1
+            onset_unidentifiable_septic += 1
+            status = "EXCLUDED_septic_onset_left_censored"
         else:
             nonseptic += 1
             false_alert_episodes += len(episodes)
             status = "TN_patient" if not episodes else "FP_patient"
         rows.append({
             "Patient_ID": patient_id,
-            "septic": bool(math.isfinite(onset)),
+            "septic": is_septic,
+            "onset_eligible": onset_eligible,
             "true_onset_iculos": onset,
             "threshold": threshold,
             "alert_rows": int(len(alerts)),
@@ -783,9 +800,11 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "n_patients": patients,
             "n_septic_patients": septic,
             "n_nonseptic_patients": nonseptic,
+            "n_onset_eligible_septic_patients": septic - onset_unidentifiable_septic,
+            "n_left_censored_septic_patients_excluded_from_onset_estimands": onset_unidentifiable_septic,
             "tp_patients": true_positive_patients,
             "fn_patients": false_negative_patients,
-            "useful_early_alert_sensitivity": true_positive_patients / septic if septic else math.nan,
+            "useful_early_alert_sensitivity": true_positive_patients / (septic - onset_unidentifiable_septic) if septic > onset_unidentifiable_septic else math.nan,
             "median_lead_time_hours": float(np.median(lead_times)) if lead_times else math.nan,
             "post_onset_alarm_episodes": post_onset_episodes,
             "false_alarm_episodes": false_alert_episodes,
@@ -940,9 +959,13 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
     """Patient-level DCA for assessment after any alert before true onset."""
     rows: list[dict[str, Any]] = []
     patients = []
+    left_censored_septic = 0
     for patient_id, patient in frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").groupby("Patient_ID", sort=False):
         onset = patient["TrueSepsisOnset_ICULOS"].dropna().unique()
-        septic = bool(len(onset))
+        septic = bool(patient["SepsisLabel"].max())
+        if septic and not len(onset):
+            left_censored_septic += 1
+            continue
         at_risk = patient["ICULOS"] < float(onset[0]) if septic else pd.Series(True, index=patient.index)
         patients.append({
             "Patient_ID": patient_id,
@@ -972,6 +995,7 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
             "treat_all_net_benefit_ci_95_high": all_ci[1],
             "treat_none_net_benefit": 0.0,
             "n_patients": int(len(patients)),
+            "n_left_censored_septic_patients_excluded": int(left_censored_septic),
             "tp_patients": int((action * truth).sum()),
             "fp_patients": int((action * (1 - truth)).sum()),
             "unit": "patient",
@@ -1044,6 +1068,7 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
     positive = y == 1
     positive_pre_onset = positive & np.isfinite(onset) & (oof["ICULOS"].to_numpy(dtype=float) < onset)
     positive_onset_or_post = positive & np.isfinite(onset) & ~positive_pre_onset
+    positive_left_censored = positive & ~np.isfinite(onset)
     metrics = {
         "model_variant": variant,
         "population": "outer-fold held-out rows; patient grouping is retained for inference",
@@ -1055,7 +1080,8 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
         "positive_label_composition": {
             "pre_onset_rows": int(positive_pre_onset.sum()),
             "onset_or_post_onset_rows": int(positive_onset_or_post.sum()),
-            "onset_or_post_onset_fraction": float(positive_onset_or_post.sum() / positive.sum()) if positive.sum() else math.nan,
+            "left_censored_onset_unidentifiable_rows": int(positive_left_censored.sum()),
+            "onset_or_post_onset_fraction_among_exact_onset_rows": float(positive_onset_or_post.sum() / (positive_pre_onset.sum() + positive_onset_or_post.sum())) if (positive_pre_onset.sum() + positive_onset_or_post.sum()) else math.nan,
             "interpretation": "Challenge-positive rows are not equivalent to fixed-horizon early warnings.",
         },
         "prevalence_only_brier_reference": float(y.mean() * (1 - y.mean())),
