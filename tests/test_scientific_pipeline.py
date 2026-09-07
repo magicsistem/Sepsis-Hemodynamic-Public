@@ -352,6 +352,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
         self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
         self.assertIn("RESUME_RUN_ID", entrypoint)
+        self.assertIn("SCHEDULER_", entrypoint)
+        self.assertIn("sacct -n -X", entrypoint)
         self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
         self.assertIn("logs/run_ledger.tsv", job)

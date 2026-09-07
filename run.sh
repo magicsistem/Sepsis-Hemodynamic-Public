@@ -49,6 +49,18 @@ else
 fi
 export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY
 command -v sbatch >/dev/null || { echo "FAIL: sbatch is required; invoke on CEDIA" >&2; exit 1; }
+reconcile_ledger() {
+    local ledger="$ROOT/logs/run_ledger.tsv" run job commit node state
+    [[ -f "$ledger" ]] || return 0
+    while IFS=$'\t' read -r run job commit node; do
+        grep -q $'\t'"$job"$'\t'.*$'\t'SCHEDULER_ "$ledger" && continue
+        state=$(sacct -n -X -j "$job" --format=State --parsable2 2>/dev/null | sed -n '1p' | tr -d '[:space:]')
+        case "$state" in COMPLETED|FAILED|CANCELLED*|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED)
+            printf '%s\t%s\t%s\t%s\t%s\tSCHEDULER_%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$run" "$job" "$commit" "$node" "$state" >> "$ledger";;
+        esac
+    done < <(awk -F '\t' '$6 == "STARTED" {print $2 "\t" $3 "\t" $4 "\t" $5}' "$ledger")
+}
+reconcile_ledger
 [[ -f data/raw/archive.zip ]] || { echo "FAIL: data/raw/archive.zip is missing" >&2; exit 1; }
 
 if [[ -n "${RESUME_RUN_ID:-}" ]]; then
