@@ -503,6 +503,14 @@ class ScientificPipelineTests(unittest.TestCase):
             self.assertIn("COMPUTATIONAL_RUN_VALIDATED", source)
             self.assertIn('final_validation"].get("status") != "PASS"', source)
 
+    def test_oof_artifacts_do_not_duplicate_feature_matrix(self):
+        self.assertEqual(len(pipeline.OOF_OUTPUT_COLUMNS), len(set(pipeline.OOF_OUTPUT_COLUMNS)))
+        self.assertNotIn("Hct_last_obs", pipeline.OOF_OUTPUT_COLUMNS)
+        self.assertIn("records.append(outer_test[OOF_OUTPUT_COLUMNS])", inspect.getsource(pipeline.outer_oof))
+        validator = inspect.getsource(pipeline.validate_final_manifest)
+        self.assertIn('pd.read_csv(run_dir / "features.csv", nrows=0)', validator)
+        self.assertIn("list(oof.columns) != OOF_OUTPUT_COLUMNS", validator)
+
     def test_nested_calibration_and_threshold_provenance(self):
         inner = pd.DataFrame({
             "Patient_ID": ["A:p1"] * 4 + ["A:p2"] * 4,

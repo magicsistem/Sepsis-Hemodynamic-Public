@@ -540,6 +540,11 @@ MODEL_CANDIDATES = (
     {"id": "depth5", "max_depth": 5, "learning_rate": 0.05, "min_child_weight": 1, "subsample": 0.8, "colsample_bytree": 0.8},
 )
 
+OOF_OUTPUT_COLUMNS = [
+    "Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS",
+    "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt", "nested_threshold", "model_variant",
+]
+
 
 def inner_patient_splits(patient: pd.DataFrame, n_splits: int = 3, seed_offset: int = 0, split_seed: int = SEED):
     if patient["SepsisLabel"].value_counts().min() < n_splits:
@@ -1028,7 +1033,7 @@ def outer_oof(
         outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
         outer_test["nested_threshold"] = threshold
         outer_test["model_variant"] = variant
-        records.append(outer_test)
+        records.append(outer_test[OOF_OUTPUT_COLUMNS])
         selection_rows.append({
             "model_variant": variant,
             "outer_fold": int(outer_fold),
@@ -1362,11 +1367,15 @@ def validate_final_manifest(run_dir: Path, allow_pending: bool = False) -> dict[
     required_stability = {"split_seed", "model_variant", "fold_artifact", "fold_sha256", "auroc", "average_precision"}
     if len(stability) != 2 * len(FEATURE_POLICY["split_stability_seeds"]) or set(stability["split_seed"]) != set(FEATURE_POLICY["split_stability_seeds"]) or not required_stability.issubset(stability.columns):
         raise PipelineError("Repeated grouped split-stability artifact is invalid")
+    feature_schema = pd.read_csv(run_dir / "features.csv", nrows=0)
     for variant in ("baseline", "enhanced"):
         oof = pd.read_csv(run_dir / f"{variant}_oof_predictions.csv")
-        features = model_features(oof, variant)
-        if "SourceSet" in features or "Patient_ID" in features or "SepsisLabel" in features:
-            raise PipelineError("Administrative or label field leaked into model feature policy")
+        expected_features = model_features(feature_schema, variant)
+        stage = manifest["stages"].get(variant, {})
+        if stage.get("feature_count") != len(expected_features) or stage.get("feature_column_hash") != stable_hash(expected_features):
+            raise PipelineError(f"Final {variant} model feature provenance is invalid")
+        if list(oof.columns) != OOF_OUTPUT_COLUMNS:
+            raise PipelineError(f"Final {variant} OOF artifact contains redundant or missing columns")
         if not (oof.groupby("Patient_ID")["Fold"].nunique() == 1).all():
             raise PipelineError("Final OOF fold provenance is invalid")
         if not np.isfinite(oof[["prob_raw", "prob_platt", "nested_threshold"]].to_numpy(dtype=float)).all():
