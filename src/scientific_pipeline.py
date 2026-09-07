@@ -542,7 +542,7 @@ MODEL_CANDIDATES = (
 
 OOF_OUTPUT_COLUMNS = [
     "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel", "TrueSepsisOnset_ICULOS",
-    "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt", "nested_threshold", "model_variant",
+    "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt", "nested_threshold",
 ]
 
 
@@ -1009,7 +1009,7 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
 
 
 def outer_oof(
-    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, gpu: dict[str, Any], columns_override: list[str] | None = None, split_seed: int = SEED, artifact_stem: str | None = None
+    features: pd.DataFrame, folds: pd.DataFrame, variant: str, output_dir: Path, gpu: dict[str, Any], columns_override: list[str] | None = None, split_seed: int = SEED, artifact_stem: str | None = None, persist_oof: bool = True
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     merged = require_fold_context(features, folds)
     artifact_stem = artifact_stem or variant
@@ -1032,7 +1032,6 @@ def outer_oof(
         outer_test["prob_raw"] = model.predict_proba(matrix(outer_test, columns))[:, 1]
         outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
         outer_test["nested_threshold"] = threshold
-        outer_test["model_variant"] = variant
         records.append(outer_test[OOF_OUTPUT_COLUMNS])
         selection_rows.append({
             "model_variant": variant,
@@ -1049,21 +1048,22 @@ def outer_oof(
     oof = pd.concat(records, ignore_index=True).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
     if len(oof) != len(merged) or oof.duplicated(["Patient_ID", "ICULOS"]).any():
         raise PipelineError("Outer OOF output does not contain each row exactly once")
-    atomic_csv(oof, output_dir / f"{artifact_stem}_oof_predictions.csv")
+    if persist_oof:
+        atomic_csv(oof, output_dir / f"{artifact_stem}_oof_predictions.csv")
     atomic_csv(pd.DataFrame(selection_rows), output_dir / f"{artifact_stem}_nested_selection.csv")
     return oof, {
         "model_variant": variant,
         "feature_count": len(columns),
         "feature_column_hash": stable_hash(columns),
-        "oof_artifact": f"{artifact_stem}_oof_predictions.csv",
-        "oof_sha256": sha256_file(output_dir / f"{artifact_stem}_oof_predictions.csv"),
+        "oof_artifact": f"{artifact_stem}_oof_predictions.csv" if persist_oof else None,
+        "oof_sha256": sha256_file(output_dir / f"{artifact_stem}_oof_predictions.csv") if persist_oof else None,
         "selection_artifact": f"{artifact_stem}_nested_selection.csv",
         "selection_sha256": sha256_file(output_dir / f"{artifact_stem}_nested_selection.csv"),
         "gpu": gpu,
     }
 
 
-def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str, Any]:
+def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path, persist_artifacts: bool = True) -> dict[str, Any]:
     y = oof["SepsisLabel"].to_numpy(dtype=int)
     raw = oof["prob_raw"].to_numpy(dtype=float)
     calibrated = oof["prob_platt"].to_numpy(dtype=float)
@@ -1123,15 +1123,15 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path) -> dict[str
             "probability_kind": "platt_nested",
             "unit": "descriptive row-time strata; no independent-row inference",
         }
-    metrics_path = output_dir / f"{variant}_metrics.json"
-    atomic_json(metrics_path, metrics)
-    atomic_csv(pd.DataFrame(early["patients"]), output_dir / f"{variant}_early_warning_patients.csv")
-    reliability = reliability_rows(y, raw, variant, "raw") + reliability_rows(y, calibrated, variant, "platt_nested")
-    atomic_csv(pd.DataFrame(reliability), output_dir / f"{variant}_reliability.csv")
-    atomic_csv(
-        pd.DataFrame(decision_curve(oof, "prob_platt", np.arange(0.05, 0.51, 0.05))),
-        output_dir / f"{variant}_dca.csv",
-    )
+    if persist_artifacts:
+        atomic_json(output_dir / f"{variant}_metrics.json", metrics)
+        atomic_csv(pd.DataFrame(early["patients"]), output_dir / f"{variant}_early_warning_patients.csv")
+        reliability = reliability_rows(y, raw, variant, "raw") + reliability_rows(y, calibrated, variant, "platt_nested")
+        atomic_csv(pd.DataFrame(reliability), output_dir / f"{variant}_reliability.csv")
+        atomic_csv(
+            pd.DataFrame(decision_curve(oof, "prob_platt", np.arange(0.05, 0.51, 0.05))),
+            output_dir / f"{variant}_dca.csv",
+        )
     return metrics
 
 
@@ -1461,7 +1461,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         stability_manifests.append(fold_manifest)
         stable_folds = pd.read_csv(fold_path)
         for variant in ("baseline", "enhanced"):
-            stable_oof, detail = outer_oof(features, stable_folds, variant, run_dir, gpu, split_seed=split_seed, artifact_stem=f"stability_seed_{split_seed}_{variant}")
+            stable_oof, detail = outer_oof(features, stable_folds, variant, run_dir, gpu, split_seed=split_seed, artifact_stem=f"stability_seed_{split_seed}_{variant}", persist_oof=False)
             stability_rows.append({"split_seed": split_seed, "model_variant": variant, "fold_artifact": fold_path.name, "fold_sha256": fold_manifest["artifact_sha256"], "feature_column_hash": detail["feature_column_hash"], **discrimination_metrics(stable_oof["SepsisLabel"].to_numpy(dtype=int), stable_oof["prob_platt"].to_numpy(dtype=float))})
     atomic_csv(pd.DataFrame(stability_rows), run_dir / "split_stability.csv")
     stages["split_stability"] = {"artifact": "split_stability.csv", "artifact_sha256": sha256_file(run_dir / "split_stability.csv"), "seeds": list(FEATURE_POLICY["split_stability_seeds"]), "additional_fold_manifests": stability_manifests}
@@ -1489,8 +1489,8 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "physiology_measurements_only", "without_explicit_process", "without_iculos", "without_hosp_adm_time", "without_explicit_missingness_indicators",
         "without_cv", "without_iqr", "without_sampen",
     ):
-        oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, gpu, ablation_columns(features, name))
-        summary = model_summary(oof, f"ablation_{name}", run_dir)
+        oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, gpu, ablation_columns(features, name), persist_oof=False)
+        summary = model_summary(oof, f"ablation_{name}", run_dir, persist_artifacts=False)
         ablations.append({
             "ablation": name,
             "definition": ablation_definitions.get(name, f"pre-specified removal: {name}"),
@@ -1501,8 +1501,8 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
             "utility_at_nested_threshold": summary["challenge_utility"]["platt_at_nested_fold_threshold"],
         })
     control, permuted_columns = matched_permutation_control(features, folds)
-    control_oof, control_detail = outer_oof(control, folds, "ablation_permuted_enhanced", run_dir, gpu, model_features(control, "enhanced"))
-    control_summary = model_summary(control_oof, "ablation_permuted_enhanced", run_dir)
+    control_oof, control_detail = outer_oof(control, folds, "ablation_permuted_enhanced", run_dir, gpu, model_features(control, "enhanced"), persist_oof=False)
+    control_summary = model_summary(control_oof, "ablation_permuted_enhanced", run_dir, persist_artifacts=False)
     ablations.append({
         "ablation": "permuted_enhanced_matched_count",
         "definition": "enhanced-only columns independently permuted within outer folds without outcomes; predictor count unchanged",

@@ -302,6 +302,9 @@ class ScientificPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             summary = pipeline.model_summary(oof, "oracle", Path(directory))
             emitted = json.loads((Path(directory) / "oracle_metrics.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline.model_summary(oof, "oracle", Path(directory), persist_artifacts=False)
+            self.assertEqual(list(Path(directory).iterdir()), [])
         expected = pipeline.average_precision_score(oof["SepsisLabel"], oof["prob_raw"])
         self.assertAlmostEqual(summary["raw"]["average_precision"], expected)
         self.assertEqual(emitted["raw"]["average_precision"], summary["raw"]["average_precision"])
@@ -507,7 +510,10 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(len(pipeline.OOF_OUTPUT_COLUMNS), len(set(pipeline.OOF_OUTPUT_COLUMNS)))
         self.assertIn("Age", pipeline.OOF_OUTPUT_COLUMNS)
         self.assertNotIn("Hct_last_obs", pipeline.OOF_OUTPUT_COLUMNS)
+        self.assertNotIn("model_variant", pipeline.OOF_OUTPUT_COLUMNS)
         self.assertIn("records.append(outer_test[OOF_OUTPUT_COLUMNS])", inspect.getsource(pipeline.outer_oof))
+        self.assertIn("if persist_oof:", inspect.getsource(pipeline.outer_oof))
+        self.assertIn("if persist_artifacts:", inspect.getsource(pipeline.model_summary))
         validator = inspect.getsource(pipeline.validate_final_manifest)
         self.assertIn('pd.read_csv(run_dir / "features.csv", nrows=0)', validator)
         self.assertIn("list(oof.columns) != OOF_OUTPUT_COLUMNS", validator)
