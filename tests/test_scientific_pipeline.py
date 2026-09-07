@@ -356,6 +356,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("PYTHONHASHSEED=20260906", job)
         self.assertIn("logs/run_ledger.tsv", job)
         self.assertIn("trap '", job)
+        self.assertIn("CANCELLED_signal_TERM", job)
+        self.assertIn("trap - EXIT", job)
         self.assertNotIn('os.environ["PYTHONHASHSEED"] =', (root / "src" / "scientific_pipeline.py").read_text(encoding="utf-8"))
         production = "\n".join(path.read_text(encoding="utf-8") for directory in (root / "src", root / "scripts") for path in directory.glob("*.py"))
         self.assertNotIn('filterwarnings("ignore")', production)
