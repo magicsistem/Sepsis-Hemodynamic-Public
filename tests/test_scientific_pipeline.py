@@ -236,6 +236,7 @@ class ScientificPipelineTests(unittest.TestCase):
         frame = pd.DataFrame({
             "Patient_ID": ["A:p1"] * 3 + ["A:p2"] * 3,
             "ICULOS": [1, 2, 3] * 2,
+            "SepsisLabel": [1] * 3 + [0] * 3,
             "TrueSepsisOnset_ICULOS": [4.0] * 3 + [math.nan] * 3,
             "probability": [0.1, 0.8, 0.1, 0.9, 0.1, 0.1],
         })
@@ -249,6 +250,7 @@ class ScientificPipelineTests(unittest.TestCase):
         frame = pd.DataFrame({
             "Patient_ID": ["A:p1"] * 20 + ["B:p1"] * 2,
             "ICULOS": septic_times + [1, 2],
+            "SepsisLabel": [1] * 20 + [0] * 2,
             "TrueSepsisOnset_ICULOS": [20.0] * 20 + [math.nan] * 2,
             "probability": [float(hour in {2, 3, 8, 20}) for hour in septic_times] + [1.0, 1.0],
             "threshold": [0.5] * 22,
