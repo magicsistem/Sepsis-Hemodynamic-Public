@@ -541,7 +541,7 @@ MODEL_CANDIDATES = (
 )
 
 OOF_OUTPUT_COLUMNS = [
-    "Patient_ID", "SourceSet", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS",
+    "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel", "TrueSepsisOnset_ICULOS",
     "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt", "nested_threshold", "model_variant",
 ]
 

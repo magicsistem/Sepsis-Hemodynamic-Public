@@ -505,6 +505,7 @@ class ScientificPipelineTests(unittest.TestCase):
 
     def test_oof_artifacts_do_not_duplicate_feature_matrix(self):
         self.assertEqual(len(pipeline.OOF_OUTPUT_COLUMNS), len(set(pipeline.OOF_OUTPUT_COLUMNS)))
+        self.assertIn("Age", pipeline.OOF_OUTPUT_COLUMNS)
         self.assertNotIn("Hct_last_obs", pipeline.OOF_OUTPUT_COLUMNS)
         self.assertIn("records.append(outer_test[OOF_OUTPUT_COLUMNS])", inspect.getsource(pipeline.outer_oof))
         validator = inspect.getsource(pipeline.validate_final_manifest)
