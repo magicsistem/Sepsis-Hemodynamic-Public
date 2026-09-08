@@ -518,6 +518,11 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn('pd.read_csv(run_dir / "features.csv", nrows=0)', validator)
         self.assertIn("list(oof.columns) != OOF_OUTPUT_COLUMNS", validator)
 
+    def test_outer_fold_assignment_is_never_a_model_feature(self):
+        frame = pd.DataFrame(columns=["Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus", "Fold", "Hct_last_obs"])
+        self.assertNotIn("Fold", pipeline.model_features(frame, "baseline"))
+        self.assertNotIn("Fold", pipeline.model_features(frame, "enhanced"))
+
     def test_nested_calibration_and_threshold_provenance(self):
         inner = pd.DataFrame({
             "Patient_ID": ["A:p1"] * 4 + ["A:p2"] * 4,

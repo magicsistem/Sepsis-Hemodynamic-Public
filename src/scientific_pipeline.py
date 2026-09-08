@@ -437,7 +437,7 @@ def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
 def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     # ICULOS is an observed official predictor, not an identifier. SourceSet is
     # administrative provenance and is never a model input.
-    excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus"}
+    excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus", "Fold"}
     columns = [column for column in frame.columns if column not in excluded and not column.endswith("_sampen_effective_n_24h")]
     enhanced_only = [column for column in columns if column.endswith(("_cv_8h", "_iqr_8h", "_sampen_24h", "_sampen_24h_zero_match"))]
     if variant == "baseline":
