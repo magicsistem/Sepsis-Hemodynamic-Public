@@ -9,14 +9,14 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: pending
+- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: CEDIA job 25587 ran 37 tests in 9.094 s, all PASS, before the experiment; job exit 0.
 
-- [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: pending
+- [x] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
+  EVIDENCE: job 25587, run 20260908T145928Z-0dea39c, COMPLETED 0:0 on compute-0-2; manifest status COMPUTATIONAL_RUN_VALIDATED and final_validation PASS.
 
-- [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: pending
+- [x] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
+  EVIDENCE: private exhaustive ledger rechecked after run 25587: 114 CLOSED, 8 AUTHOR_ACTION_REQUIRED, 1 BLOCKED_EXTERNAL_DATA, 86 DEFERRED_TO_MANUSCRIPT_PHASE, and 42 NOT_APPLICABLE_WITH_JUSTIFICATION; zero pending states.
 
-- [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
-  EVIDENCE: pending
+- [x] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
+  EVIDENCE: independent local audit checked manifest/lineage hashes, 1,552,210 ordered unique rows, 40,336 patient-isolated folds, persistent labels, finite probabilities/thresholds, exact baseline/enhanced identity, 109/133 feature-policy hashes excluding Fold, exact AUROC/AP/Brier recomputation, 4 transport rows, 9 ablations, and 6 stability rows; all PASS. Utility/calibration/no-future oracles independently passed in the 37-test suite.
