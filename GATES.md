@@ -20,3 +20,21 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 
 - [x] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: independent local audit checked manifest/lineage hashes, 1,552,210 ordered unique rows, 40,336 patient-isolated folds, persistent labels, finite probabilities/thresholds, exact baseline/enhanced identity, 109/133 feature-policy hashes excluding Fold, exact AUROC/AP/Brier recomputation, 4 transport rows, 9 ablations, and 6 stability rows; all PASS. Utility/calibration/no-future oracles independently passed in the 37-test suite.
+
+
+## Gates: methodology and results reconstruction
+
+- [ ] G6: every project source, historical result family, Git transition, and current run artifact is classified by role and current validity
+  CHECK: manuscript traceability audit has no unclassified evidence item
+
+- [ ] G7: the corrected rerun after N011-N014 is independently revalidated and every reported number maps to a hash-verified artifact
+  CHECK: numerical reconstruction and result-manifest validation both exit 0
+
+- [ ] G8: the master result table includes every executed current model, calibration, transport, stability, subgroup, temporal, DCA, inference, and ablation result
+  CHECK: manuscript traceability audit has no missing executed branch or metric
+
+- [ ] G9: Methodology matches the final code and defines every implemented estimand, formula, parameter, edge case, and inferential unit; references are checked against original sources
+  CHECK: code-to-method and citation audits have no unsupported statement
+
+- [ ] G10: Results use only the final corrected rerun, distinguish non-executed/external-data limitations, and pass two complete traceability readings
+  CHECK: manuscript traceability audit exits 0 twice from a clean checkout

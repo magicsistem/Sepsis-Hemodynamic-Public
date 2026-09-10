@@ -58,7 +58,7 @@ HEMODYNAMIC_COLUMNS = ("HR", "O2Sat", "SBP", "MAP", "DBP", "Resp")
 HEADER_ALIASES = {"HCT": "Hct", "Hematocrit": "Hct"}
 FEATURE_POLICY = {
     "last_observation_max_age_hours": 24,
-    "rolling_windows_hours": (5, 8, 11, 24),
+    "rolling_windows_hours": {"cv_iqr": 8, "sampen": 24},
     "rolling_min_observations": 2,
     "sampen": {"window_hours": 24, "m": 2, "r_factor": 0.2, "min_observations": 4},
     "early_warning": {"start_hours_before_onset": 12, "end_hours_before_onset": 1, "refractory_hours": 6},
@@ -396,10 +396,11 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
         for column in HEMODYNAMIC_COLUMNS:
             raw = pd.to_numeric(patient[column], errors="coerce")
             raw.index = times.to_numpy(dtype=float)
-            mean_8h = rolling_feature(raw, 8, "mean")
-            std_8h = rolling_feature(raw, 8, "std")
+            variability_hours = FEATURE_POLICY["rolling_windows_hours"]["cv_iqr"]
+            mean_8h = rolling_feature(raw, variability_hours, "mean")
+            std_8h = rolling_feature(raw, variability_hours, "std")
             engineered[f"{column}_cv_8h"] = (std_8h / mean_8h.abs()).replace([np.inf, -np.inf], np.nan).to_numpy()
-            engineered[f"{column}_iqr_8h"] = rolling_feature(raw, 8, "iqr").to_numpy()
+            engineered[f"{column}_iqr_8h"] = rolling_feature(raw, variability_hours, "iqr").to_numpy()
             observed = pd.Series(raw.notna().to_numpy(dtype="int8"), index=pd.to_timedelta(times.to_numpy(dtype=float), unit="h"))
             engineered[f"{column}_sampen_effective_n_24h"] = observed.rolling("24h", closed="right").sum().to_numpy(dtype="int16")
             sampen = causal_sampen(raw, times)
@@ -833,9 +834,14 @@ def paired_early_warning_comparison(baseline: pd.DataFrame, enhanced: pd.DataFra
     if not base[key].equals(enh[key]):
         raise PipelineError("Paired early-warning comparison requires aligned OOF rows")
     patient_tables = []
+    excluded_left_censored = None
     for name, frame in (("baseline", base), ("enhanced", enh)):
         rows = pd.DataFrame(early_warning_metrics(frame, "prob_platt", "nested_threshold")["patients"])
-        rows = rows.loc[rows["septic"], ["Patient_ID", "true_onset_iculos", "first_eligible_alert_iculos"]]
+        excluded = int((rows["septic"] & ~rows["onset_eligible"]).sum())
+        if excluded_left_censored is not None and excluded != excluded_left_censored:
+            raise PipelineError("Paired early-warning models disagree on onset eligibility")
+        excluded_left_censored = excluded
+        rows = rows.loc[rows["onset_eligible"], ["Patient_ID", "true_onset_iculos", "first_eligible_alert_iculos"]]
         rows[f"{name}_lead_time_hours"] = rows["true_onset_iculos"] - rows.pop("first_eligible_alert_iculos")
         patient_tables.append(rows.drop(columns="true_onset_iculos") if name == "enhanced" else rows)
     paired = patient_tables[0].merge(patient_tables[1], on="Patient_ID", validate="one_to_one")
@@ -844,17 +850,19 @@ def paired_early_warning_comparison(baseline: pd.DataFrame, enhanced: pd.DataFra
     ci = bootstrap_ci(differences.to_numpy()) if len(differences) else (math.nan, math.nan)
     return {
         "estimand": "paired lead-time difference among septic patients detected by both models inside the fixed onset-12h to onset-1h window",
-        "n_septic_patients": int(len(paired)),
+        "n_onset_eligible_septic_patients": int(len(paired)),
+        "n_left_censored_septic_patients_excluded": int(excluded_left_censored or 0),
         "baseline_detected": int(paired["baseline_lead_time_hours"].notna().sum()),
         "enhanced_detected": int(paired["enhanced_lead_time_hours"].notna().sum()),
         "detected_by_both": int(len(both)),
         "baseline_only": int((paired["baseline_lead_time_hours"].notna() & paired["enhanced_lead_time_hours"].isna()).sum()),
         "enhanced_only": int((paired["baseline_lead_time_hours"].isna() & paired["enhanced_lead_time_hours"].notna()).sum()),
         "missed_by_both": int(paired[["baseline_lead_time_hours", "enhanced_lead_time_hours"]].isna().all(axis=1).sum()),
+        "mean_enhanced_minus_baseline_lead_time_hours_among_both": float(differences.mean()) if len(differences) else math.nan,
         "median_enhanced_minus_baseline_lead_time_hours_among_both": float(np.median(differences)) if len(differences) else math.nan,
         "paired_bootstrap_ci_95_low": ci[0],
         "paired_bootstrap_ci_95_high": ci[1],
-        "interpretation": "Detection counts retain missed patients; timing is secondary and conditional on detection by both models.",
+        "interpretation": "Detection counts retain every onset-eligible septic patient; timing is secondary and conditional on detection by both models. The confidence interval is for the paired mean difference; the median is descriptive.",
     }
 
 
@@ -1208,9 +1216,10 @@ def paired_patient_permutation(
     return rows
 
 
-def logistic_representation_robustness(features: pd.DataFrame, folds: pd.DataFrame) -> list[dict[str, Any]]:
+def logistic_representation_robustness(features: pd.DataFrame, folds: pd.DataFrame) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     merged = require_fold_context(features, folds)
     rows = []
+    oof: dict[str, pd.DataFrame] = {}
     for variant in ("baseline", "enhanced"):
         columns = model_features(merged, variant)
         probability = np.full(len(merged), np.nan)
@@ -1228,9 +1237,14 @@ def logistic_representation_robustness(features: pd.DataFrame, folds: pd.DataFra
         rows.append({
             "classifier": "sklearn_SGDClassifier_log_loss_l2", "model_variant": variant,
             "split_hash": stable_hash(folds.to_dict(orient="records")), "feature_column_hash": stable_hash(columns),
+            "brier": float(brier_score_loss(merged["SepsisLabel"], probability)),
             **discrimination_metrics(merged["SepsisLabel"].to_numpy(dtype=int), probability),
         })
-    return rows
+        oof[variant] = merged[["Patient_ID", "ICULOS", "SepsisLabel", "Fold"]].assign(probability=probability)
+    inference = paired_patient_permutation(oof["baseline"], oof["enhanced"], "probability")
+    for row in inference:
+        row["classifier"] = "sklearn_SGDClassifier_log_loss_l2"
+    return rows, inference
 
 
 def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str, test_source: str, gpu: dict[str, Any]) -> dict[str, Any]:
@@ -1287,6 +1301,14 @@ def ablation_columns(frame: pd.DataFrame, name: str) -> list[str]:
         "without_iqr": tuple(column for column in columns if "_iqr_" in column),
         "without_sampen": tuple(column for column in columns if "_sampen_" in column),
     }
+    additions = {
+        "baseline_plus_cv": tuple(column for column in columns if "_cv_" in column),
+        "baseline_plus_iqr": tuple(column for column in columns if "_iqr_" in column),
+        "baseline_plus_sampen": tuple(column for column in columns if "_sampen_" in column),
+    }
+    if name in additions:
+        baseline = model_features(frame, "baseline")
+        return baseline + [column for column in additions[name] if column not in baseline]
     if name not in removals:
         raise PipelineError(f"Unknown ablation: {name}")
     filtered = [column for column in columns if column not in set(removals[name])]
@@ -1478,7 +1500,9 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         for train_source, test_source in (("A", "B"), ("B", "A"))
     ]
     atomic_csv(pd.DataFrame(transport), run_dir / "transport.csv")
-    atomic_csv(pd.DataFrame(logistic_representation_robustness(features, folds)), run_dir / "classifier_robustness.csv")
+    classifier_rows, classifier_inference = logistic_representation_robustness(features, folds)
+    atomic_csv(pd.DataFrame(classifier_rows), run_dir / "classifier_robustness.csv")
+    atomic_csv(pd.DataFrame(classifier_inference), run_dir / "classifier_robustness_inference.csv")
     ablations = []
     ablation_definitions = {
         "physiology_measurements_only": "Age, sex, time, unit and explicit process/missingness features removed; native NaN states remain observable",
@@ -1488,6 +1512,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     for name in (
         "physiology_measurements_only", "without_explicit_process", "without_iculos", "without_hosp_adm_time", "without_explicit_missingness_indicators",
         "without_cv", "without_iqr", "without_sampen",
+        "baseline_plus_cv", "baseline_plus_iqr", "baseline_plus_sampen",
     ):
         oof, detail = outer_oof(features, folds, f"ablation_{name}", run_dir, gpu, ablation_columns(features, name), persist_oof=False)
         summary = model_summary(oof, f"ablation_{name}", run_dir, persist_artifacts=False)
@@ -1569,6 +1594,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "paired_early_warning": node("paired_early_warning.json", {model_nodes[variant]["artifact"]: model_nodes[variant]["sha256"] for variant in model_nodes}, "src.scientific_pipeline:paired_early_warning_comparison", ("paired_detection_and_conditional_lead_time_v1",)),
         "transport": node("transport.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:fit_source_transport", ("train_A_test_B_and_train_B_test_A_v1",)),
         "classifier_robustness": node("classifier_robustness.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:logistic_representation_robustness", ("l2_logistic_sgd_same_grouped_folds_v1",)),
+        "classifier_robustness_inference": node("classifier_robustness_inference.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:logistic_representation_robustness", ("l2_logistic_paired_patient_permutation_v1",)),
         "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("pre_specified_feature_family_ablations_v1",)),
         "split_stability": node("split_stability.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds+outer_oof", ("repeated_grouped_split_seeds_v1",)),
     }

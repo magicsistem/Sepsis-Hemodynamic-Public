@@ -280,11 +280,20 @@ class ScientificPipelineTests(unittest.TestCase):
         enhanced = baseline.copy()
         baseline["prob_platt"] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         enhanced["prob_platt"] = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_censored = baseline.iloc[:4].copy()
+        left_censored["Patient_ID"] = "p3"
+        left_censored["SepsisLabel"] = 1
+        left_censored["TrueSepsisOnset_ICULOS"] = math.nan
+        left_censored["prob_platt"] = 0.0
+        baseline = pd.concat([baseline, left_censored], ignore_index=True)
+        enhanced = pd.concat([enhanced, left_censored], ignore_index=True)
         comparison = pipeline.paired_early_warning_comparison(baseline, enhanced)
+        self.assertEqual((comparison["n_onset_eligible_septic_patients"], comparison["n_left_censored_septic_patients_excluded"]), (2, 1))
         self.assertEqual((comparison["baseline_detected"], comparison["enhanced_detected"]), (2, 1))
         self.assertEqual((comparison["detected_by_both"], comparison["baseline_only"], comparison["missed_by_both"]), (1, 1, 0))
+        self.assertEqual(comparison["mean_enhanced_minus_baseline_lead_time_hours_among_both"], -1.0)
         self.assertEqual(comparison["median_enhanced_minus_baseline_lead_time_hours_among_both"], -1.0)
-        self.assertIn("conditional on detection by both", comparison["interpretation"])
+        self.assertIn("confidence interval is for the paired mean", comparison["interpretation"])
 
     def test_reporting_writes_metrics_from_supplied_oof(self):
         rows = []
@@ -349,6 +358,11 @@ class ScientificPipelineTests(unittest.TestCase):
             self.assertIn("HR_last_obs", columns)
         self.assertTrue({"Age", "Gender"}.issubset(process))
         self.assertTrue({"Age", "Gender"}.isdisjoint(physiology))
+        baseline = set(pipeline.model_features(features, "baseline"))
+        self.assertEqual(set(pipeline.ablation_columns(features, "baseline_plus_cv")) - baseline, {column for column in pipeline.model_features(features, "enhanced") if "_cv_" in column})
+        self.assertEqual(set(pipeline.ablation_columns(features, "baseline_plus_iqr")) - baseline, {column for column in pipeline.model_features(features, "enhanced") if "_iqr_" in column})
+        self.assertEqual(set(pipeline.ablation_columns(features, "baseline_plus_sampen")) - baseline, {column for column in pipeline.model_features(features, "enhanced") if "_sampen_" in column})
+        self.assertEqual(pipeline.FEATURE_POLICY["rolling_windows_hours"], {"cv_iqr": 8, "sampen": 24})
 
     def test_python_hash_seed_is_exported_before_python_starts(self):
         root = Path(__file__).resolve().parents[1]
@@ -463,10 +477,12 @@ class ScientificPipelineTests(unittest.TestCase):
             for i in range(20)
         ])
         folds = pd.DataFrame({"Patient_ID": features["Patient_ID"], "SepsisLabel": features["SepsisLabel"], "Fold": [i % 5 for i in range(20)]})
-        rows = pipeline.logistic_representation_robustness(features, folds)
+        rows, inference = pipeline.logistic_representation_robustness(features, folds)
         self.assertEqual([row["model_variant"] for row in rows], ["baseline", "enhanced"])
         self.assertEqual(rows[0]["split_hash"], rows[1]["split_hash"])
         self.assertTrue(all(row["classifier"] == "sklearn_SGDClassifier_log_loss_l2" for row in rows))
+        self.assertEqual({row["metric"] for row in inference}, {"auroc", "average_precision", "brier"})
+        self.assertTrue(all(row["test"] == "paired_patient_cluster_permutation" for row in inference))
 
     def test_stage_checkpoint_resume_is_hash_and_context_bound(self):
         with tempfile.TemporaryDirectory() as directory:
