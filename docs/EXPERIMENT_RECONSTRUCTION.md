@@ -1,6 +1,9 @@
 # Experimental reconstruction record
 
-Status: **IN PROGRESS**. This is an evidence map, not manuscript text. Numerical Results remain blocked until run `20260910T171847Z-47e38e7` (Slurm 25746) is complete and independently validated.
+Status: **IN PROGRESS**. This is an evidence map, not manuscript text. Run
+`20260910T171847Z-47e38e7` (Slurm 25746) was cancelled and preserved after the
+line-by-line re-audit found new defects. Numerical results remain blocked until
+the corrected source passes CEDIA tests, a new full run, and independent audit.
 
 ## Evidence authority
 
@@ -33,7 +36,7 @@ The request's “sources” means the project's source files as a whole; no lite
 - Subsequent commits corrected source provenance, official Utility oracles, GPU detection/backend selection, chronology/schema, nested calibration, grouped split stability, container provenance, alarm burden, temporal/process ablations, lineage, left-censored onset and compact OOF artifacts.
 - `0dea39c`: removed outer `Fold` from every model feature policy. Job 25587 then completed the whole contemporary pipeline.
 - `47e38e7`: reopened the experiment after the manuscript reconstruction audit found N011–N015; corrected early-warning denominators/CI naming, added paired logistic inference, add-one-family ablations and exact runtime window policy.
-- `ad9c331`: documentation-only commit that marks the 25587 PASS as superseded while run 25746 is active. It is not the scientific source commit of that run.
+- Job 25746 was cancelled after N016–N032 were found during whole-source line review; it is historical and cannot provide final numbers.
 
 All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`; no historical run is promoted merely because an intermediate job or test job says PASS.
 
@@ -45,20 +48,20 @@ All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`;
 | Test jobs before 25587 | HISTORICAL PASS — SUPERSEDED | Each was a preflight for an older source commit and did not produce a complete final run. |
 | Failed/cancelled full jobs 25321, 25423, 25457, 25459, 25463, 25498 | HISTORICAL RUN — FAILED/CANCELLED | The ledger and Slurm retain terminal state; no final manifest was promoted. |
 | G1 | CURRENT PASS | Exhaustive private ledger remains locally excluded from Git. |
-| G2 | CURRENT PASS for commit 47e38e7 | Job 25745 ran `bash run.sh --tests` on `compute-0-2`, exit 0, after validating source inventory `cf0c23aa...fff6`. |
-| G3–G5 | NOT EXECUTED for commit 47e38e7 | Job 25746 is the pending full rerun and independent audit source. |
-| G6–G10 | IN PROGRESS | Reconstruction, master table, citations, Methodology, Results and two final traceability reads remain open. |
+| G2 | SUPERSEDED PASS for commit 47e38e7 | Job 25745 passed before the new audit corrections and cannot validate them. |
+| G3–G5 | NOT EXECUTED for current source | Job 25746 is cancelled historical evidence; a new full rerun is required. |
+| G6–G11 | IN PROGRESS | Whole-source audit, reconstruction, reporting inventory and final traceability remain open. |
 
 ## Implemented pipeline inventory
 
-| Stage/branch | Implementation | Required run evidence | State for 47e38e7 |
+| Stage/branch | Implementation | Required run evidence | Current state |
 |---|---|---|---|
-| Environment/provenance | clean source inventory; pinned archive, container, utility scorer, versions, hash seed and validated GPU | runtime manifest and Slurm log | EXECUTING in 25746 |
-| Data gate | ZIP PSV-only; official 40 predictors plus label; explicit Hct aliases; source-qualified patient IDs; strict monotone ICULOS and persistent binary labels | harmonized stage manifest | EXECUTING in 25746 |
-| Outcome | shifted persistent Challenge label; exact onset = first 0→1 transition ICULOS + 6 h; first-row-positive cases are left-censored | harmonized data/cohort flow | EXECUTING in 25746 |
-| Causal features | static predictors unchanged; current missingness, observation age, 24 h bounded last observation; current dynamic measurement count | feature manifest | EXECUTING in 25746 |
-| Enhanced families | six hemodynamic signals; 8 h CV, 8 h IQR, observed-only 24 h SampEn and zero-match indicator | feature policy/hash and measurement support | EXECUTING in 25746 |
-| Outer validation | five stratified patient-grouped folds | folds manifest | EXECUTING in 25746 |
+| Environment/provenance | exact source inventory including raw archive; pinned archive, container, utility scorer, versions, hash seed and validated GPU; resume context includes dependencies/backend | runtime manifest and Slurm log | IMPLEMENTED; CEDIA TEST REQUIRED |
+| Data gate | pinned ZIP PSV-only; exact cohort counts; official 40 predictors plus label; explicit Hct aliases; source-qualified patient IDs; strict numeric/chronology/label checks | harmonized stage manifest | IMPLEMENTED; FULL RERUN REQUIRED |
+| Outcome | shifted persistent Challenge label; exact onset = first 0→1 transition ICULOS + 6 h; first-row-positive cases are left-censored | harmonized data/cohort flow | IMPLEMENTED; FULL RERUN REQUIRED |
+| Causal features | static predictors unchanged; current missingness, observation age, 24 h bounded last observation; current dynamic measurement count | feature manifest | IMPLEMENTED; FULL RERUN REQUIRED |
+| Enhanced families | six hemodynamic signals; 8 h CV, 8 h IQR, observed-only 24 h SampEn over comparable starts and zero-match indicator | feature policy/hash and measurement support | IMPLEMENTED; FULL RERUN REQUIRED |
+| Outer validation | five stratified patient-grouped folds with exact cohort/outcome provenance | folds manifest | IMPLEMENTED; FULL RERUN REQUIRED |
 | Inner development | three grouped folds; depth-3/depth-5 XGBoost candidates; AP selection; inner-only early stopping/tree count | nested-selection CSVs | NOT YET EXECUTED |
 | Calibration/policy | fixed logistic recalibration on inner OOF with equal patient total weights; utility-maximizing grid threshold from inner OOF only | selection and OOF artifacts | NOT YET EXECUTED |
 | Primary OOF | baseline and enhanced outer-held-out raw/calibrated probabilities | two OOF files and metrics | NOT YET EXECUTED |
@@ -67,7 +70,7 @@ All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`;
 | Challenge Utility | unchanged official scorer at raw/calibrated 0.5 and nested fold thresholds | metric artifacts and scorer hash | NOT YET EXECUTED |
 | Early warning | onset-anchored [−12 h, −1 h], 6 h refractory episodes, detection, paired timing and burden | model summaries, patient artifacts, paired comparison | NOT YET EXECUTED |
 | Temporal/subgroup | ICU-time and onset-relative descriptive strata; age groups <50, [50,70), >=70 | temporal and age CSVs | NOT YET EXECUTED |
-| DCA | patient action after any pre-onset alert; thresholds 0.05–0.50; model/all/none with patient bootstrap | DCA CSVs | NOT YET EXECUTED |
+| DCA | assessment now for reconstructed onset in the next 6 h at observed pre-onset decision hours; thresholds 0.05–0.50; model/all/none with patient-cluster bootstrap | DCA CSVs | NOT YET EXECUTED |
 | Stability | seeds 20260906, 20261007 and 20261108 | stability fold manifests and summary | NOT YET EXECUTED |
 | Transport | train A→test B and train B→test A, separately for both feature variants | transport CSV | NOT YET EXECUTED |
 | Classifier robustness | L2 logistic SGD baseline/enhanced on identical grouped folds plus paired inference | robustness and inference CSVs | NOT YET EXECUTED |

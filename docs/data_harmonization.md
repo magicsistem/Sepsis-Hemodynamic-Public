@@ -10,6 +10,9 @@ canonical `Hct`; unrecognized fields, duplicate normalized fields, or missing
 fields abort the run. Patient identity is source-qualified (`A:p000001`) to
 prevent collisions between source sets.
 
-The run manifest records archive SHA-256, ZIP inventory hash, file count, row
-count, patient count, and per-source patient counts. These properties are
-validated before feature construction.
+The accepted archive SHA-256 is
+`1a0eb8040c76fdab84ee6c7dd6afdab4ad457a33d363cb7e4e200af713345897`.
+Before feature construction the loader requires exactly 40,336 PSV files,
+40,336 source-qualified patients (A: 20,336; B: 20,000), and 1,552,210 rows.
+The run manifest also records the ZIP inventory hash. Observed nonnumeric or
+infinite values are rejected; only genuine missing observations remain missing.

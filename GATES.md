@@ -9,32 +9,35 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: CEDIA job 25745 tested commit 47e38e7 through run.sh on compute-0-2; exit 0. The prior job 25587 evidence is historical after N011-N015.
+- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 25745 passed commit 47e38e7, but N016-N032 changed scientific and provenance logic afterward; the updated oracle suite has not yet run on CEDIA.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: run 25587 was a historical PASS superseded by N011-N015; corrected run 25746 is in progress.
+  EVIDENCE: run 25587 is historical; run 25746 was intentionally cancelled after N016 was found and is retained as a superseded attempt.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: M23 and M175 plus N011-N015 are reopened until corrected run evidence exists.
+  EVIDENCE: B09, M23, M175, and N011-N032 are reopened until corrected test and run evidence exists.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
-  EVIDENCE: run 25587 independent audit is historical after N011-N015; repeat after corrected run 25746.
+  EVIDENCE: prior independent audit is historical after N011-N032; repeat after a corrected full run.
 
 
 ## Gates: methodology and results reconstruction
 
 - [ ] G6: every project source, historical result family, Git transition, and current run artifact is classified by role and current validity
-  CHECK: manuscript traceability audit has no unclassified evidence item
+  EVIDENCE: pending line-by-line source and reachability audit.
 
-- [ ] G7: the corrected rerun after N011-N015 is independently revalidated and every reported number maps to a hash-verified artifact
-  CHECK: numerical reconstruction and result-manifest validation both exit 0
+- [ ] G7: the current corrected rerun is independently revalidated and every reported number maps to a hash-verified artifact
+  EVIDENCE: pending corrected rerun after N016-N032.
 
 - [ ] G8: the master result table includes every executed current model, calibration, transport, stability, subgroup, temporal, DCA, inference, and ablation result
-  CHECK: manuscript traceability audit has no missing executed branch or metric
+  EVIDENCE: pending corrected rerun artifact inventory; no manuscript is in scope.
 
 - [ ] G9: Methodology matches the final code and defines every implemented estimand, formula, parameter, edge case, and inferential unit; references are checked against original sources
-  CHECK: code-to-method and citation audits have no unsupported statement
+  EVIDENCE: pending technical code-to-definition audit; no paper text will be drafted.
 
 - [ ] G10: Results use only the final corrected rerun, distinguish non-executed/external-data limitations, and pass two complete traceability readings
-  CHECK: manuscript traceability audit exits 0 twice from a clean checkout
+  EVIDENCE: pending experimental reporting audit; no paper text will be drafted.
+
+- [ ] G11: every active tracked source file and every cross-file scientific interface has a recorded line-by-line review with zero unrecorded defects
+  EVIDENCE: audit in progress; binary raw data and withdrawn historical outputs are checked for isolation and reachability rather than interpreted as source code.
