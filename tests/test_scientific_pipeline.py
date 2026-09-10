@@ -273,7 +273,7 @@ class ScientificPipelineTests(unittest.TestCase):
 
     def test_average_precision_and_pr_auc_are_named_distinct_estimands(self):
         y = np.array([0, 1, 0, 1])
-        p = np.array([0.1, 0.4, 0.35, 0.8])
+        p = np.array([0.1, 0.35, 0.4, 0.8])
         metrics = pipeline.discrimination_metrics(y, p)
         self.assertAlmostEqual(metrics["average_precision"], (1.0 + 2 / 3) / 2)
         self.assertIn("trapezoidal_pr_auc", metrics)
@@ -625,7 +625,7 @@ class ScientificPipelineTests(unittest.TestCase):
 
     def test_outer_calibration_never_receives_outer_test_patients(self):
         features = pd.concat([
-            patient_frame(hours=(1,), labels=(index % 2,)).assign(Patient_ID=f"A:p{index}", Age=40.0 + index)
+            pipeline.feature_patient(patient_frame(hours=(1,), labels=(index % 2,)), include_hemodynamics=False).assign(Patient_ID=f"A:p{index}", Age=40.0 + index)
             for index in range(4)
         ], ignore_index=True)
         folds = pd.DataFrame({"Patient_ID": [f"A:p{index}" for index in range(4)], "SepsisLabel": [index % 2 for index in range(4)], "Fold": [0, 1, 0, 1]})
