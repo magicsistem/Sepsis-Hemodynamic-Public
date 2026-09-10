@@ -267,7 +267,8 @@ def source_and_patient(member_name: str) -> tuple[str, str]:
 def validate_patient_frame(frame: pd.DataFrame, member_name: str) -> pd.DataFrame:
     if frame.empty:
         raise PipelineError(f"{member_name}: empty patient file")
-    frame.loc[:, CHALLENGE_COLUMNS] = numeric_columns(frame, CHALLENGE_COLUMNS, member_name)
+    frame = frame.copy()
+    frame[list(CHALLENGE_COLUMNS)] = numeric_columns(frame, CHALLENGE_COLUMNS, member_name)
     if not np.isfinite(frame["ICULOS"]).all() or (frame["ICULOS"].diff().iloc[1:] <= 0).any():
         raise PipelineError(f"{member_name}: ICULOS must be finite and strictly increasing within patient")
     labels = frame["SepsisLabel"]
@@ -464,8 +465,8 @@ def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
     missing = sorted(required.difference(frame.columns))
     if missing:
         raise PipelineError(f"Harmonized artifact is invalid; missing {missing}")
-    frame.loc[:, CHALLENGE_COLUMNS] = numeric_columns(frame, CHALLENGE_COLUMNS, "harmonized artifact")
-    frame.loc[:, ["TrueSepsisOnset_ICULOS"]] = numeric_columns(frame, ["TrueSepsisOnset_ICULOS"], "harmonized artifact")
+    frame[list(CHALLENGE_COLUMNS)] = numeric_columns(frame, CHALLENGE_COLUMNS, "harmonized artifact")
+    frame[["TrueSepsisOnset_ICULOS"]] = numeric_columns(frame, ["TrueSepsisOnset_ICULOS"], "harmonized artifact")
     features = pd.concat(
         [feature_patient(group, include_hemodynamics=True) for _, group in frame.groupby("Patient_ID", sort=False)],
         ignore_index=True,

@@ -84,6 +84,11 @@ class ScientificPipelineTests(unittest.TestCase):
     def test_chronology_and_persistent_shifted_labels_are_fail_closed(self):
         valid = patient_frame(hours=(1, 2, 3, 4), labels=(0, 1, 1, 1))
         pipeline.validate_patient_frame(valid, "p000001.psv")
+        strings = valid.astype(object)
+        for column in pipeline.CHALLENGE_COLUMNS:
+            strings[column] = [str(value) if pd.notna(value) else value for value in strings[column]]
+        converted = pipeline.validate_patient_frame(strings, "p000001.psv")
+        self.assertTrue(np.issubdtype(converted["ICULOS"].dtype, np.number))
         invalid_time = valid.copy()
         invalid_time.loc[2, "ICULOS"] = 2
         with self.assertRaises(pipeline.PipelineError):
