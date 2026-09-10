@@ -10,7 +10,8 @@ import subprocess
 import sys
 import tempfile
 
-EXCLUDED_PREFIXES = ("data/", "results/", "external_artifacts/")
+EXCLUDED_PREFIXES = ("results/", "external_artifacts/")
+ACTIVE_PREFIXES = ("jobs/", "scripts/", "src/", "tests/", "vendor/physionet2019/", "data/raw/")
 try:
     string_types = (basestring,)
 except NameError:
@@ -39,6 +40,19 @@ def tracked_source_files(root):
     if not isinstance(output, str):
         output = output.decode("utf-8")
     return [path for path in output.split("\0") if path and not path.startswith(EXCLUDED_PREFIXES)]
+
+
+def active_runtime_files(root):
+    files = []
+    files.extend(name for name in os.listdir(root) if os.path.isfile(os.path.join(root, name)) and name.endswith((".py", ".sh", ".slurm")))
+    for prefix in ACTIVE_PREFIXES:
+        directory = os.path.join(root, prefix)
+        if not os.path.isdir(directory):
+            continue
+        for parent, directories, names in os.walk(directory):
+            directories[:] = [name for name in directories if name != "__pycache__"]
+            files.extend(os.path.relpath(os.path.join(parent, name), root) for name in names if not name.endswith((".pyc", ".pyo")))
+    return sorted(files)
 
 
 def write_sidecar(root, sidecar):
@@ -74,6 +88,10 @@ def validate_sidecar(root, sidecar):
         raise SourceProvenanceError("sidecar must describe a clean nonempty source inventory")
     if payload.get("source_inventory_sha256") != inventory_hash(files):
         raise SourceProvenanceError("source inventory hash mismatch")
+    expected_active = sorted(path for path in files if path == "run.sh" or path.startswith(ACTIVE_PREFIXES))
+    observed_active = active_runtime_files(root)
+    if observed_active != expected_active:
+        raise SourceProvenanceError("active runtime inventory mismatch: expected={0}, observed={1}".format(expected_active, observed_active))
     for relative, expected in files.items():
         path = os.path.join(root, relative)
         if not isinstance(relative, string_types) or relative.startswith("/") or ".." in relative.split("/") or not os.path.isfile(path):
