@@ -10,13 +10,13 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 25745 passed commit 47e38e7, but N016-N032 changed scientific and provenance logic afterward; the updated oracle suite has not yet run on CEDIA.
+  EVIDENCE: job 25761 failed closed on two incorrect fixtures (N033); corrected suite has not yet passed on CEDIA.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: run 25587 is historical; run 25746 was intentionally cancelled after N016 was found and is retained as a superseded attempt.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: B09, M23, M175, and N011-N032 are reopened until corrected test and run evidence exists.
+  EVIDENCE: B09, M23, M175, and N011-N033 are reopened until corrected test and run evidence exists.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: prior independent audit is historical after N011-N032; repeat after a corrected full run.

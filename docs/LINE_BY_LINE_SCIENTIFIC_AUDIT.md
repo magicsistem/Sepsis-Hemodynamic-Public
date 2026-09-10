@@ -63,6 +63,7 @@ promoted by the pipeline.
 | N030 | Sidecar allowed an extra executable file on CEDIA. | Exact active runtime inventory comparison. | Extra-source oracle; CEDIA pending. |
 | N031 | Resume context omitted container, dependencies and backend. | Exact scientific runtime-context equality. | Context mutation oracle; CEDIA pending. |
 | N032 | Final validation mostly checked hashes, not scientific product contracts. | Added cohort, fold, OOF, selection, DCA, reliability, inference, transport and ablation gates. | Full-run validation pending. |
+| N033 | The AP oracle accidentally ranked both positives above both negatives, and the nested-calibration fixture supplied raw rather than engineered predictors. | Use a hand-ranked AP example with positive precisions 1 and 2/3; construct the calibration fixture through the canonical feature function. | Job 25761 failed closed; corrected CEDIA rerun pending. |
 
 No item in this table is `CLOSED` until the updated suite, complete run and
 independent post-run audit pass on `compute-0-2`.
