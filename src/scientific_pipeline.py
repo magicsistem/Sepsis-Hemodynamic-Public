@@ -734,7 +734,7 @@ def calibration_metrics(y: np.ndarray, probability: np.ndarray, sample_weight: n
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", ConvergenceWarning)
-            model = LogisticRegression(penalty="none", solver="lbfgs", max_iter=1000).fit(
+            model = LogisticRegression(penalty=None, solver="lbfgs", max_iter=1000).fit(
                 standardized_logit, y, sample_weight=weights
             )
     except ConvergenceWarning as exc:
