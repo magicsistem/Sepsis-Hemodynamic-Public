@@ -15,6 +15,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+import warnings
 import zipfile
 from collections import Counter
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.metrics import (
@@ -723,12 +725,26 @@ def calibration_metrics(y: np.ndarray, probability: np.ndarray, sample_weight: n
         weight = weights[mask]
         if weight.sum() > 0:
             ece += float(weight.sum() / weights.sum() * abs(np.average(y[mask], weights=weight) - np.average(probability[mask], weights=weight)))
-    logit = np.log(probability / (1 - probability)).reshape(-1, 1)
-    model = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=SEED).fit(logit, y, sample_weight=weights)
+    logit = np.log(probability / (1 - probability))
+    logit_mean = float(np.average(logit, weights=weights))
+    logit_scale = float(np.sqrt(np.average((logit - logit_mean) ** 2, weights=weights)))
+    if not np.isfinite(logit_scale) or logit_scale <= np.finfo(float).eps:
+        raise PipelineError("Calibration slope is not identifiable from a constant logit")
+    standardized_logit = ((logit - logit_mean) / logit_scale).reshape(-1, 1)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConvergenceWarning)
+            model = LogisticRegression(penalty="none", solver="lbfgs", max_iter=1000).fit(
+                standardized_logit, y, sample_weight=weights
+            )
+    except ConvergenceWarning as exc:
+        raise PipelineError("Unpenalized calibration regression did not converge after weighted logit standardization") from exc
+    calibration_slope = float(model.coef_[0, 0] / logit_scale)
+    calibration_intercept = float(model.intercept_[0] - model.coef_[0, 0] * logit_mean / logit_scale)
     lower, upper = -40.0, 40.0
     for _ in range(100):
         midpoint = (lower + upper) / 2
-        fitted = 1 / (1 + np.exp(-(logit[:, 0] + midpoint)))
+        fitted = 1 / (1 + np.exp(-(logit + midpoint)))
         if np.average(y - fitted, weights=weights) > 0:
             lower = midpoint
         else:
@@ -737,8 +753,8 @@ def calibration_metrics(y: np.ndarray, probability: np.ndarray, sample_weight: n
         "brier": float(brier_score_loss(y, probability, sample_weight=weights)),
         "ece_fixed_10_bins": float(ece),
         "calibration_in_the_large_intercept_slope_fixed_1": float((lower + upper) / 2),
-        "calibration_intercept_with_slope": float(model.intercept_[0]),
-        "calibration_slope": float(model.coef_[0, 0]),
+        "calibration_intercept_with_slope": calibration_intercept,
+        "calibration_slope": calibration_slope,
     }
 
 

@@ -451,6 +451,32 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["calibration_in_the_large_intercept_slope_fixed_1"], 0.0, places=6)
         self.assertEqual(pipeline.FEATURE_POLICY["ece_equal_width_bins"], 10)
 
+    def test_calibration_regression_standardizes_logits_and_restores_coefficients(self):
+        class Recorder:
+            intercept_ = np.array([2.0])
+            coef_ = np.array([[3.0]])
+
+            def fit(self, x, y, sample_weight):
+                self.x = x[:, 0]
+                self.weights = sample_weight
+                return self
+
+        y = np.array([0, 0, 1, 1])
+        probability = np.array([1e-6, 0.2, 0.8, 1 - 1e-6])
+        weights = np.array([1.0, 2.0, 3.0, 4.0])
+        logit = np.log(probability / (1 - probability))
+        mean = np.average(logit, weights=weights)
+        scale = np.sqrt(np.average((logit - mean) ** 2, weights=weights))
+        recorder = Recorder()
+        with mock.patch.object(pipeline, "LogisticRegression", return_value=recorder):
+            metrics = pipeline.calibration_metrics(y, probability, sample_weight=weights)
+        self.assertAlmostEqual(np.average(recorder.x, weights=weights), 0.0)
+        self.assertAlmostEqual(np.average(recorder.x ** 2, weights=weights), 1.0)
+        self.assertAlmostEqual(metrics["calibration_slope"], 3.0 / scale)
+        self.assertAlmostEqual(metrics["calibration_intercept_with_slope"], 2.0 - 3.0 * mean / scale)
+        with self.assertRaisesRegex(pipeline.PipelineError, "not identifiable"):
+            pipeline.calibration_metrics(y, np.full(4, 0.5), sample_weight=weights)
+
     def test_xgboost_fit_equalizes_patient_total_weight(self):
         class Recorder:
             def fit(self, x, y, **kwargs):
