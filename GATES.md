@@ -9,14 +9,14 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26123 passed 41/41 for N036/N037; N038-N040 correct alarm exposure/classification and hash the DCA policy, so current CEDIA validation is pending.
+- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 26128 passed 41/41 in 13.881 s on compute-0-2 for commit 04c93fa and source inventory fb2b73ae, including N036-N040.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: runs 26122 and 26124 were cancelled early when the continuing source audit found N037 and N038; run 25832 remains superseded by N036.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: N036/N037 are tested and require a complete rerun; N038-N040 are implemented and require CEDIA tests and rerun evidence.
+  EVIDENCE: N036-N040 are tested and require a complete rerun plus independent artifact validation before closure.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.
