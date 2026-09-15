@@ -1,8 +1,8 @@
 # Whole-source line-by-line scientific audit
 
-Status: **CORRECTION N037 IMPLEMENTED; EXECUTION EVIDENCE PENDING**. This is
-technical audit evidence, not manuscript text. Job 26122 was cancelled and
-preserved when this review found unsupported prespecification labels. Final
+Status: **CORRECTIONS N038/N039 IMPLEMENTED; EXECUTION EVIDENCE PENDING**. This is
+technical audit evidence, not manuscript text. Jobs 26122/26124 were cancelled
+and preserved when this review found N037/N038. Final
 run hashes are withheld until the corresponding gates pass.
 
 ## Reviewed active files
@@ -68,6 +68,8 @@ promoted by the pipeline.
 | N035 | Unscaled calibration regression was ill-conditioned in a bootstrap draw. | Standardize weighted logits for fitting and transform coefficients back. | Numerical/non-identifiability oracles passed in jobs 25831 and 26121. |
 | N036 | DCA used persistent-label probabilities for the different six-hour-onset outcome. | Fit a separate sigmoid on eligible inner-OOF six-hour outcomes and apply it only to the outer fold. | Eligibility, onset, target, probability-source and nested-isolation oracles passed in job 26121; full run pending. |
 | N037 | Provenance called analyses predeclared/prespecified without preregistration evidence. | Use “declared computational family” and “fixed feature-family ablations”; remove the unreachable fallback claim. | Source oracle implemented; CEDIA test pending. |
+| N038 | Alarm rates called their denominator observed decision hours but used elapsed ICULOS span. | Divide by the actual count of observed decision rows. | Irregular-ICULOS oracle implemented; CEDIA test pending. |
+| N039 | The DCA threshold range was duplicated in generation and validation but absent from the hashed policy. | Put the fixed 0.05–0.50 grid in `FEATURE_POLICY` and consume it in both paths. | Exact policy/grid oracle implemented; CEDIA test pending. |
 
 No item in this table is `CLOSED` until the updated suite, complete run and
 independent post-run audit pass on `compute-0-2`.

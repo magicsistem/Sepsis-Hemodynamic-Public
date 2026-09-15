@@ -75,6 +75,8 @@ FEATURE_POLICY = {
     "calibration_fit_weighting": "equal total weight per patient",
     "dca_calibration": "nested_inner_oof_sigmoid_for_pre_onset_six_hour_outcome",
     "dca_calibration_fit_weighting": "each eligible observed decision hour equally weighted",
+    "dca_horizon_hours": 6,
+    "dca_threshold_probabilities": tuple(round(x, 2) for x in np.arange(0.05, 0.51, 0.05)),
     "ece_equal_width_bins": 10,
     "calibration_patient_cluster_bootstrap_repeats": 300,
     "dca_patient_cluster_bootstrap_repeats": 300,
@@ -710,7 +712,7 @@ def six_hour_decision_frame(frame: pd.DataFrame, probability_column: str) -> tup
         eligible = patient.loc[at_risk, ["ICULOS", probability_column]].copy()
         eligible["Patient_ID"] = patient_id
         hours_to_onset = float(onset[0]) - eligible["ICULOS"].to_numpy(dtype=float) if septic else np.full(len(eligible), np.inf)
-        eligible["outcome_onset_within_6h"] = ((hours_to_onset > 0) & (hours_to_onset <= 6)).astype(int)
+        eligible["outcome_onset_within_6h"] = ((hours_to_onset > 0) & (hours_to_onset <= FEATURE_POLICY["dca_horizon_hours"])).astype(int)
         eligible["probability"] = eligible.pop(probability_column).astype(float)
         decision_frames.append(eligible[["Patient_ID", "outcome_onset_within_6h", "probability"]])
     decisions = pd.concat(decision_frames, ignore_index=True) if decision_frames else pd.DataFrame()
@@ -893,7 +895,7 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     post_onset_episodes = 0
     total_alert_decision_hours = 0
     total_alarm_episodes = 0
-    total_observation_hours = 0.0
+    total_observed_decision_hours = 0
     lead_times: list[float] = []
     rows: list[dict[str, Any]] = []
     for patient_id, patient in frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").groupby("Patient_ID", sort=False):
@@ -913,7 +915,7 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
         total_alert_decision_hours += len(alerts)
         total_alarm_episodes += len(episodes)
         repeated_alerts += max(0, len(alerts) - len(episodes))
-        total_observation_hours += float(times[-1] - times[0] + 1)
+        total_observed_decision_hours += len(times)
         eligible: list[float] = []
         is_septic = bool(patient["SepsisLabel"].max())
         onset_eligible = is_septic and math.isfinite(onset)
@@ -974,10 +976,10 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "alarm_episode_policy": f"a negative-to-positive threshold crossing opens an episode and a {policy['refractory_hours']}h refractory period; persistence alone cannot open another episode",
             "n_alarm_episodes": total_alarm_episodes,
             "time_in_alert_observed_decision_hours": total_alert_decision_hours,
-            "time_in_alert_fraction_observed": total_alert_decision_hours / total_observation_hours if total_observation_hours else math.nan,
+            "time_in_alert_fraction_observed": total_alert_decision_hours / total_observed_decision_hours if total_observed_decision_hours else math.nan,
             "mean_alert_decision_hours_per_episode": total_alert_decision_hours / total_alarm_episodes if total_alarm_episodes else math.nan,
-            "alert_decision_hours_per_patient_day": total_alert_decision_hours / (total_observation_hours / 24) if total_observation_hours else math.nan,
-            "false_alarm_episodes_per_patient_day": false_alert_episodes / (total_observation_hours / 24) if total_observation_hours else math.nan,
+            "alert_decision_hours_per_patient_day": total_alert_decision_hours / (total_observed_decision_hours / 24) if total_observed_decision_hours else math.nan,
+            "false_alarm_episodes_per_patient_day": false_alert_episodes / (total_observed_decision_hours / 24) if total_observed_decision_hours else math.nan,
         },
         "patients": rows,
     }
@@ -1157,7 +1159,7 @@ def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Ite
         model_ci = tuple(float(value) for value in np.quantile(model_samples, [0.025, 0.975]))
         all_ci = tuple(float(value) for value in np.quantile(all_samples, [0.025, 0.975]))
         rows.append({
-            "action": "initiate clinical assessment now for true sepsis onset within the next 6 hours",
+            "action": f"initiate clinical assessment now for true sepsis onset within the next {FEATURE_POLICY['dca_horizon_hours']} hours",
             "outcome_estimand": "true reconstructed onset in (decision time, decision time + 6h]; post-onset and left-censored states excluded",
             "probability_source": probability_column,
             "threshold_probability": float(threshold),
@@ -1309,7 +1311,7 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path, persist_art
         reliability = reliability_rows(y, raw, variant, "raw") + reliability_rows(y, calibrated, variant, "platt_nested")
         atomic_csv(pd.DataFrame(reliability), output_dir / f"{variant}_reliability.csv")
         atomic_csv(
-            pd.DataFrame(decision_curve(oof, "prob_onset_within_6h_nested", np.arange(0.05, 0.51, 0.05))),
+            pd.DataFrame(decision_curve(oof, "prob_onset_within_6h_nested", FEATURE_POLICY["dca_threshold_probabilities"])),
             output_dir / f"{variant}_dca.csv",
         )
     return metrics
@@ -1618,7 +1620,7 @@ def validate_final_manifest(run_dir: Path, allow_pending: bool = False) -> dict[
         if len(selection) != 5 or set(selection["outer_fold"]) != set(range(5)) or not {"inner_fold_patient_hash", "calibrator", "dca_calibrator", "nested_threshold_from_inner_oof_only"}.issubset(selection.columns):
             raise PipelineError(f"Final {variant} nested-selection provenance is invalid")
         dca = pd.read_csv(run_dir / f"{variant}_dca.csv")
-        if len(dca) != 10 or not np.allclose(dca["threshold_probability"], np.arange(0.05, 0.51, 0.05)) or set(dca["estimand_unit"]) != {"observed pre-onset decision hour"} or set(dca["probability_source"]) != {"prob_onset_within_6h_nested"}:
+        if len(dca) != len(FEATURE_POLICY["dca_threshold_probabilities"]) or not np.allclose(dca["threshold_probability"], FEATURE_POLICY["dca_threshold_probabilities"]) or set(dca["estimand_unit"]) != {"observed pre-onset decision hour"} or set(dca["probability_source"]) != {"prob_onset_within_6h_nested"}:
             raise PipelineError(f"Final {variant} DCA artifact is invalid")
         reliability = pd.read_csv(run_dir / f"{variant}_reliability.csv")
         if len(reliability) != 20 or set(reliability["probability_kind"]) != {"raw", "platt_nested"} or set(reliability["bin"]) != set(range(10)):

@@ -285,6 +285,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(metrics["xgboost_training_eval_metric"], "logloss")
 
     def test_dca_uses_six_hour_decisions_and_patient_cluster_uncertainty(self):
+        self.assertEqual(pipeline.FEATURE_POLICY["dca_horizon_hours"], 6)
+        self.assertEqual(pipeline.FEATURE_POLICY["dca_threshold_probabilities"], tuple(np.arange(0.05, 0.51, 0.05).round(2)))
         frame = pd.DataFrame({
             "Patient_ID": ["A:p1"] * 3 + ["A:p2"] * 3,
             "ICULOS": [1, 2, 3] * 2,
@@ -350,6 +352,14 @@ class ScientificPipelineTests(unittest.TestCase):
         persistent_summary = pipeline.early_warning_metrics(persistent_remote, "probability", "threshold")["summary"]
         self.assertEqual((persistent_summary["tp_patients"], persistent_summary["fn_patients"]), (0, 1))
         self.assertEqual(persistent_summary["n_alarm_episodes"], 1)
+        irregular = pd.DataFrame({
+            "Patient_ID": ["A:irregular"] * 3, "ICULOS": [1, 3, 10],
+            "SepsisLabel": [0] * 3, "TrueSepsisOnset_ICULOS": [math.nan] * 3,
+            "probability": [1.0, 0.0, 0.0], "threshold": [0.5] * 3,
+        })
+        irregular_summary = pipeline.early_warning_metrics(irregular, "probability", "threshold")["summary"]
+        self.assertAlmostEqual(irregular_summary["time_in_alert_fraction_observed"], 1 / 3)
+        self.assertAlmostEqual(irregular_summary["false_alarm_episodes_per_patient_day"], 8.0)
 
     def test_paired_lead_time_keeps_detection_denominators(self):
         rows = []
