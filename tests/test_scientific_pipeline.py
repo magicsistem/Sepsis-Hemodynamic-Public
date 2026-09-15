@@ -337,6 +337,10 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(summary["repeated_alert_rows_suppressed_by_refractory_policy"], 2)
         self.assertEqual(summary["false_alarm_episodes"], 2)
         self.assertEqual(summary["post_onset_alarm_episodes"], 1)
+        self.assertEqual(sum(summary[name] for name in (
+            "false_alarm_episodes", "useful_window_alarm_episodes", "late_pre_onset_alarm_episodes",
+            "post_onset_alarm_episodes", "left_censored_septic_alarm_episodes_unclassified",
+        )), summary["n_alarm_episodes"])
         self.assertAlmostEqual(summary["time_in_alert_fraction_observed"], 6 / 22)
         self.assertIn("6h refractory", summary["alarm_episode_policy"])
         self.assertEqual((summary["probability_source"], summary["threshold_source"]), ("probability", "threshold"))
@@ -360,6 +364,12 @@ class ScientificPipelineTests(unittest.TestCase):
         irregular_summary = pipeline.early_warning_metrics(irregular, "probability", "threshold")["summary"]
         self.assertAlmostEqual(irregular_summary["time_in_alert_fraction_observed"], 1 / 3)
         self.assertAlmostEqual(irregular_summary["false_alarm_episodes_per_patient_day"], 8.0)
+        left_censored = irregular.assign(
+            Patient_ID="A:left", SepsisLabel=1, probability=[1.0, 0.0, 0.0]
+        )
+        left_summary = pipeline.early_warning_metrics(left_censored, "probability", "threshold")["summary"]
+        self.assertEqual(left_summary["left_censored_septic_alarm_episodes_unclassified"], 1)
+        self.assertEqual((left_summary["false_alarm_episodes"], left_summary["post_onset_alarm_episodes"]), (0, 0))
 
     def test_paired_lead_time_keeps_detection_denominators(self):
         rows = []

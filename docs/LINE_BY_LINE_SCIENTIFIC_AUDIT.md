@@ -1,6 +1,6 @@
 # Whole-source line-by-line scientific audit
 
-Status: **CORRECTIONS N038/N039 IMPLEMENTED; EXECUTION EVIDENCE PENDING**. This is
+Status: **CORRECTIONS N038-N040 IMPLEMENTED; EXECUTION EVIDENCE PENDING**. This is
 technical audit evidence, not manuscript text. Jobs 26122/26124 were cancelled
 and preserved when this review found N037/N038. Final
 run hashes are withheld until the corresponding gates pass.
@@ -13,8 +13,8 @@ run hashes are withheld until the corresponding gates pass.
 | `jobs/run_experiment.slurm` | 1–62 | Allocation and trap path reviewed: hard-pinned `compute-0-2`, one A100, environment capture, append-only ledger and container execution. |
 | `scripts/run_experiment.py` | 1–37 | Thin run/validate adapter reviewed; it delegates every scientific definition to the canonical module and returns nonzero on `PipelineError`. |
 | `scripts/source_provenance.py` | complete file | Every branch reviewed. The sidecar now hashes the raw ZIP and rejects missing, changed, path-traversing, or extra active runtime files on CEDIA. |
-| `src/scientific_pipeline.py` | 1–1870 | Every function and caller reviewed from raw ZIP through final validation. Findings N016–N036 were corrected centrally and are listed below. |
-| `tests/test_scientific_pipeline.py` | 1–782 | Every oracle reviewed for independence from invalid historical numbers. New hand-computable or interface tests cover each executable correction. |
+| `src/scientific_pipeline.py` | 1–1884 | Every function and caller reviewed from raw ZIP through final validation. Findings N016–N040 were corrected centrally and are listed below. |
+| `tests/test_scientific_pipeline.py` | 1–805 | Every oracle reviewed for independence from invalid historical numbers. New hand-computable or interface tests cover each executable correction. |
 | `vendor/physionet2019/evaluate_sepsis_score.py` | 1–485 | Read completely and left unmodified. SHA-256 `26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5` is enforced before scoring. |
 | `vendor/physionet2019/__init__.py` | complete | Empty package marker only; no second scorer. |
 | `vendor/physionet2019/README.md` | complete | Pin/source notice reviewed against the enforced scorer identity. |
@@ -70,6 +70,7 @@ promoted by the pipeline.
 | N037 | Provenance called analyses predeclared/prespecified without preregistration evidence. | Use “declared computational family” and “fixed feature-family ablations”; remove the unreachable fallback claim. | Source oracle implemented; CEDIA test pending. |
 | N038 | Alarm rates called their denominator observed decision hours but used elapsed ICULOS span. | Divide by the actual count of observed decision rows. | Irregular-ICULOS oracle implemented; CEDIA test pending. |
 | N039 | The DCA threshold range was duplicated in generation and validation but absent from the hashed policy. | Put the fixed 0.05–0.50 grid in `FEATURE_POLICY` and consume it in both paths. | Exact policy/grid oracle implemented; CEDIA test pending. |
+| N040 | Left-censored and late pre-onset alarm episodes could remain uncategorized in summary output. | Report them separately without relabelling unidentifiable episodes as false or useful. | Exhaustive left-censor category oracle implemented; CEDIA test pending. |
 
 No item in this table is `CLOSED` until the updated suite, complete run and
 independent post-run audit pass on `compute-0-2`.

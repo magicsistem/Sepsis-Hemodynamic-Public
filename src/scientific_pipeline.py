@@ -891,8 +891,11 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
     true_positive_patients = 0
     false_negative_patients = 0
     false_alert_episodes = 0
+    useful_alarm_episodes = 0
     repeated_alerts = 0
     post_onset_episodes = 0
+    late_pre_onset_episodes = 0
+    left_censored_unclassified_episodes = 0
     total_alert_decision_hours = 0
     total_alarm_episodes = 0
     total_observed_decision_hours = 0
@@ -924,7 +927,9 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             lower = onset - policy["start_hours_before_onset"]
             upper = onset - policy["end_hours_before_onset"]
             eligible = [time for time in episodes if lower <= time <= upper]
+            useful_alarm_episodes += len(eligible)
             post_onset_episodes += sum(time >= onset for time in episodes)
+            late_pre_onset_episodes += sum(upper < time < onset for time in episodes)
             false_alert_episodes += sum(time < lower for time in episodes)
             if eligible:
                 true_positive_patients += 1
@@ -936,6 +941,7 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
         elif is_septic:
             septic += 1
             onset_unidentifiable_septic += 1
+            left_censored_unclassified_episodes += len(episodes)
             status = "EXCLUDED_septic_onset_left_censored"
         else:
             nonseptic += 1
@@ -955,6 +961,8 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "first_eligible_alert_iculos": eligible[0] if eligible else math.nan,
             "status": status,
         })
+    if false_alert_episodes + useful_alarm_episodes + late_pre_onset_episodes + post_onset_episodes + left_censored_unclassified_episodes != total_alarm_episodes:
+        raise PipelineError("Alarm episode categories do not cover the total burden")
     return {
         "summary": {
             "estimand": "patient-level useful early-warning window [onset-12h,onset-1h]",
@@ -971,6 +979,9 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "useful_early_alert_sensitivity": true_positive_patients / (septic - onset_unidentifiable_septic) if septic > onset_unidentifiable_septic else math.nan,
             "median_lead_time_hours": float(np.median(lead_times)) if lead_times else math.nan,
             "post_onset_alarm_episodes": post_onset_episodes,
+            "useful_window_alarm_episodes": useful_alarm_episodes,
+            "late_pre_onset_alarm_episodes": late_pre_onset_episodes,
+            "left_censored_septic_alarm_episodes_unclassified": left_censored_unclassified_episodes,
             "false_alarm_episodes": false_alert_episodes,
             "repeated_alert_rows_suppressed_by_refractory_policy": repeated_alerts,
             "alarm_episode_policy": f"a negative-to-positive threshold crossing opens an episode and a {policy['refractory_hours']}h refractory period; persistence alone cannot open another episode",
@@ -980,6 +991,7 @@ def early_warning_metrics(frame: pd.DataFrame, probability_column: str, threshol
             "mean_alert_decision_hours_per_episode": total_alert_decision_hours / total_alarm_episodes if total_alarm_episodes else math.nan,
             "alert_decision_hours_per_patient_day": total_alert_decision_hours / (total_observed_decision_hours / 24) if total_observed_decision_hours else math.nan,
             "false_alarm_episodes_per_patient_day": false_alert_episodes / (total_observed_decision_hours / 24) if total_observed_decision_hours else math.nan,
+            "alarm_rate_denominator": "all observed decision hours across included patients",
         },
         "patients": rows,
     }
