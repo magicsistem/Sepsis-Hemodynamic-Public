@@ -5,8 +5,9 @@ requires an exact sidecar-validated copy of a clean laptop commit, the pinned
 raw archive, Slurm, and the existing CEDIA container. `PYTHONHASHSEED=20260906`
 is exported before Python starts. No package installation or update occurs.
 
-Each run records UTC time, host, Git SHA and dirty state, command, archive and
-input-inventory hashes, schema and feature policy hashes, fold hash, seed,
+Each run records UTC time, host, Git SHA and dirty state, the exact source
+inventory hash, command, archive and input-inventory hashes, schema, feature
+and model policy hashes, fold hash, seed,
 dependency versions, GPU runtime validation, official Utility source hash, and
 hashes for every scientific artifact. The lineage is:
 
@@ -50,3 +51,9 @@ the held-out outer fold; DCA uncertainty uses a patient-cluster bootstrap.
 Cluster-respecting paired patient permutation tests define the
 AUROC/AP/Brier family and use canonical Benjamini-Hochberg reverse cumulative
 minima; no bootstrap sign proportion is presented as a null test.
+
+The hashed model policy records five outer folds, three inner folds, the two
+XGBoost candidates, Average Precision selection, the 600-tree early-stopping
+ceiling, 30-round patience, eight threads, and both unpenalized `lbfgs`
+sigmoid calibrators, plus the exact L2-logistic robustness settings. These are
+run configuration, not historical expected results.
