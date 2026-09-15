@@ -9,14 +9,14 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26121 passed 41/41 in 13.841 s on compute-0-2 for commit eeaea78 and source inventory 727cd3b3, including N036 fixed-horizon calibration and nested-independence oracles.
+- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 26121 passed 41/41 for N036; N037 removes unsupported prespecification claims and adds a new source oracle, so current CEDIA validation is pending.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: run 20260911T185228Z-bb3e353, job 25832, completed 0:0 on compute-0-2 with a validated 53-file package, but is superseded because N036 invalidates its DCA probability estimand.
+  EVIDENCE: run 26122 was cancelled after 00:04:34 when the continuing source audit found N037; run 25832 remains superseded by N036.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: B09, M23, M175, N011-N035 have run 25832 evidence, but N036 is implemented and requires tests, a complete rerun, and artifact validation before closure.
+  EVIDENCE: N036 is tested and requires a complete rerun; N037 is implemented and requires CEDIA tests and rerun evidence.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.

@@ -2,9 +2,10 @@
 
 Status: **IN PROGRESS**. This is an evidence map, not manuscript text. Run
 `20260911T185228Z-bb3e353` (Slurm 25832) completed but was superseded when the
-independent audit found N036 in its DCA probability estimand. Commit `8e84bee`
-passed 41/41 CEDIA tests; corrected full run 26122 is active. Numerical results
-remain blocked until that run and its independent audit pass.
+independent audit found N036 in its DCA probability estimand. Job 26121 passed
+41/41 tests for that correction; job 26122 was then cancelled and preserved
+when the continuing audit found N037. Numerical results remain blocked until
+the next corrected run and its independent audit pass.
 
 ## Evidence authority
 
@@ -40,7 +41,7 @@ The request's “sources” means the project's source files as a whole; no lite
 - Job 25746 was cancelled after N016–N032 were found during whole-source line review; it is historical and cannot provide final numbers.
 - `bb3e353`: stabilized calibration inference; job 25832 completed but its DCA is superseded by N036.
 - `eeaea78`: added nested six-hour-outcome calibration for DCA; job 26121 passed 41/41 tests.
-- `8e84bee`: records the current test gate; job 26122 is the active full regeneration on `compute-0-2`.
+- `8e84bee`: records the N036 test gate; job 26122 was cancelled after N037 was found.
 
 All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`; no historical run is promoted merely because an intermediate job or test job says PASS.
 
@@ -53,28 +54,28 @@ All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`;
 | Failed/cancelled full jobs 25321, 25423, 25457, 25459, 25463, 25498 | HISTORICAL RUN — FAILED/CANCELLED | The ledger and Slurm retain terminal state; no final manifest was promoted. |
 | G1 | CURRENT PASS | Exhaustive private ledger remains locally excluded from Git. |
 | G2 | CURRENT PASS | Job 26121 passed 41/41 for scientific code commit `eeaea78`; `8e84bee` changes gate evidence only. |
-| G3–G5 | IN PROGRESS | Full run 26122 is active; no final result is accepted before manifest validation and independent audit. |
+| G3–G5 | PENDING | Run 26122 is cancelled historical evidence; no final result is accepted before a new manifest validation and independent audit. |
 | G6–G11 | IN PROGRESS | Whole-source audit, reconstruction, reporting inventory and final traceability remain open. |
 
 ## Implemented pipeline inventory
 
 | Stage/branch | Implementation | Required run evidence | Current state |
 |---|---|---|---|
-| Environment/provenance | exact source inventory including raw archive; pinned archive, container, utility scorer, versions, hash seed and validated GPU; resume context includes dependencies/backend | runtime manifest and Slurm log | TESTED; FULL RUN ACTIVE |
+| Environment/provenance | exact source inventory including raw archive; pinned archive, container, utility scorer, versions, hash seed and validated GPU; resume context includes dependencies/backend | runtime manifest and Slurm log | TESTED; CORRECTED RERUN REQUIRED |
 | Data gate | pinned ZIP PSV-only; exact cohort counts; official 40 predictors plus label; explicit Hct aliases; source-qualified patient IDs; strict numeric/chronology/label checks | harmonized stage manifest | IMPLEMENTED; FULL RERUN REQUIRED |
 | Outcome | shifted persistent Challenge label; exact onset = first 0→1 transition ICULOS + 6 h; first-row-positive cases are left-censored | harmonized data/cohort flow | IMPLEMENTED; FULL RERUN REQUIRED |
 | Causal features | static predictors unchanged; current missingness, observation age, 24 h bounded last observation; current dynamic measurement count | feature manifest | IMPLEMENTED; FULL RERUN REQUIRED |
 | Enhanced families | six hemodynamic signals; 8 h CV, 8 h IQR, observed-only 24 h SampEn over comparable starts and zero-match indicator | feature policy/hash and measurement support | IMPLEMENTED; FULL RERUN REQUIRED |
 | Outer validation | five stratified patient-grouped folds with exact cohort/outcome provenance | folds manifest | IMPLEMENTED; FULL RERUN REQUIRED |
 | Inner development | three grouped folds; depth-3/depth-5 XGBoost candidates; AP selection; inner-only early stopping/tree count | nested-selection CSVs | NOT YET EXECUTED |
-| Calibration/policy | fixed persistent-label sigmoid on patient-balanced inner OOF; separate six-hour-onset sigmoid on eligible inner-OOF decision hours; Utility grid threshold from inner OOF only | selection and OOF artifacts | TESTED; FULL RUN ACTIVE |
+| Calibration/policy | fixed persistent-label sigmoid on patient-balanced inner OOF; separate six-hour-onset sigmoid on eligible inner-OOF decision hours; Utility grid threshold from inner OOF only | selection and OOF artifacts | TESTED; CORRECTED RERUN REQUIRED |
 | Primary OOF | baseline and enhanced outer-held-out raw/calibrated probabilities | two OOF files and metrics | NOT YET EXECUTED |
 | Primary inference | patient-cluster paired randomization for AUROC/AP/Brier; BH family | inference CSV | NOT YET EXECUTED |
 | Calibration | Brier, 10-bin ECE, intercept, slope, reliability rows and 300-draw patient bootstrap CIs | metric/reliability artifacts | NOT YET EXECUTED |
 | Challenge Utility | unchanged official scorer at raw/calibrated 0.5 and nested fold thresholds | metric artifacts and scorer hash | NOT YET EXECUTED |
 | Early warning | onset-anchored [−12 h, −1 h], 6 h refractory episodes, detection, paired timing and burden | model summaries, patient artifacts, paired comparison | NOT YET EXECUTED |
 | Temporal/subgroup | ICU-time and onset-relative descriptive strata; age groups <50, [50,70), >=70 | temporal and age CSVs | NOT YET EXECUTED |
-| DCA | assessment now for reconstructed onset in the next 6 h at observed pre-onset decision hours using its outcome-specific nested probability; thresholds 0.05–0.50; model/all/none with patient-cluster bootstrap | DCA CSVs | TESTED; FULL RUN ACTIVE |
+| DCA | assessment now for reconstructed onset in the next 6 h at observed pre-onset decision hours using its outcome-specific nested probability; thresholds 0.05–0.50; model/all/none with patient-cluster bootstrap | DCA CSVs | TESTED; CORRECTED RERUN REQUIRED |
 | Stability | seeds 20260906, 20261007 and 20261108 | stability fold manifests and summary | NOT YET EXECUTED |
 | Transport | train A→test B and train B→test A, separately for both feature variants | transport CSV | NOT YET EXECUTED |
 | Classifier robustness | L2 logistic SGD baseline/enhanced on identical grouped folds plus paired inference | robustness and inference CSVs | NOT YET EXECUTED |

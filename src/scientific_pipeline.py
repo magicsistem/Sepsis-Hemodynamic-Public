@@ -1395,7 +1395,7 @@ def paired_patient_permutation(
             "permutations": repeats,
             "p_value": raw_p[name],
             "p_value_bh_family_auroc_ap_brier": adjusted[name],
-            "hypothesis_family": "predeclared: AUROC, Average Precision, Brier",
+            "hypothesis_family": "declared computational family: AUROC, Average Precision, Brier",
         })
     return rows
 
@@ -1758,7 +1758,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         summary = model_summary(oof, f"ablation_{name}", run_dir, persist_artifacts=False)
         ablations.append({
             "ablation": name,
-            "definition": ablation_definitions.get(name, f"pre-specified removal: {name}"),
+            "definition": ablation_definitions[name],
             "feature_count": detail["feature_count"],
             "feature_column_hash": detail["feature_column_hash"],
             "average_precision_platt": summary["platt_nested"]["average_precision"],
@@ -1837,7 +1837,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "transport": node("transport.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:fit_source_transport", ("train_A_test_B_and_train_B_test_A_v1",)),
         "classifier_robustness": node("classifier_robustness.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:logistic_representation_robustness", ("l2_logistic_sgd_same_grouped_folds_v1",)),
         "classifier_robustness_inference": node("classifier_robustness_inference.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:logistic_representation_robustness", ("l2_logistic_paired_patient_permutation_v1",)),
-        "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("pre_specified_feature_family_ablations_v1",)),
+        "ablations": node("ablations.csv", {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]}, "src.scientific_pipeline:outer_oof+model_summary", ("fixed_feature_family_ablations_v1",)),
         "split_stability": node("split_stability.csv", {"features.csv": features_node["sha256"]}, "src.scientific_pipeline:write_folds+outer_oof", ("repeated_grouped_split_seeds_v1",)),
     }
     probast_node = node("probast_ai_status.json", {name["artifact"]: name["sha256"] for name in statistics_nodes.values()}, "src.scientific_pipeline:run_scientific_pipeline", ("probast_ai_not_low_risk_until_independent_review",))

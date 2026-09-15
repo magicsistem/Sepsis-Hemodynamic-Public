@@ -1,9 +1,9 @@
 # Whole-source line-by-line scientific audit
 
-Status: **CURRENT SOURCE REVIEWED; FULL RUN 26122 IN PROGRESS**. This is
-technical audit evidence, not manuscript text. The active code is commit
-`8e84bee`; its 41-test suite passed on `compute-0-2` as job 26121. Final run
-hashes are withheld until the corresponding gates pass.
+Status: **CORRECTION N037 IMPLEMENTED; EXECUTION EVIDENCE PENDING**. This is
+technical audit evidence, not manuscript text. Job 26122 was cancelled and
+preserved when this review found unsupported prespecification labels. Final
+run hashes are withheld until the corresponding gates pass.
 
 ## Reviewed active files
 
@@ -67,6 +67,7 @@ promoted by the pipeline.
 | N034 | pandas 1.5 retained `object` dtype after block `.loc` assignment. | Assign the complete named block so numeric dtypes materialize. | String-input oracle passed in jobs 25765 onward. |
 | N035 | Unscaled calibration regression was ill-conditioned in a bootstrap draw. | Standardize weighted logits for fitting and transform coefficients back. | Numerical/non-identifiability oracles passed in jobs 25831 and 26121. |
 | N036 | DCA used persistent-label probabilities for the different six-hour-onset outcome. | Fit a separate sigmoid on eligible inner-OOF six-hour outcomes and apply it only to the outer fold. | Eligibility, onset, target, probability-source and nested-isolation oracles passed in job 26121; full run pending. |
+| N037 | Provenance called analyses predeclared/prespecified without preregistration evidence. | Use “declared computational family” and “fixed feature-family ablations”; remove the unreachable fallback claim. | Source oracle implemented; CEDIA test pending. |
 
 No item in this table is `CLOSED` until the updated suite, complete run and
 independent post-run audit pass on `compute-0-2`.

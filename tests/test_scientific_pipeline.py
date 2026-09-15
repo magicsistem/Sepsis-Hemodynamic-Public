@@ -770,6 +770,9 @@ class ScientificPipelineTests(unittest.TestCase):
                 pipeline.validate_lineage_nodes(root, lineage)
 
     def test_reporting_traceability_and_fail_closed_source_set(self):
+        production = (Path(__file__).resolve().parents[1] / "src" / "scientific_pipeline.py").read_text(encoding="utf-8")
+        for unsupported_claim in ("predeclared", "pre-specified", "pre_specified"):
+            self.assertNotIn(unsupported_claim, production)
         with self.assertRaises(pipeline.PipelineError):
             pipeline.source_and_patient("Dataset.psv")
         required = {"runtime", "stages", "artifact_sha256", "lineage", "final_validation", "scientific_status"}
