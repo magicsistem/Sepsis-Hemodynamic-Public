@@ -1,6 +1,6 @@
 # Whole-source line-by-line scientific audit
 
-Status: **CURRENT SOURCE REVIEWED; ACCUMULATED TEST AND FULL RUN PENDING**. This is
+Status: **CURRENT SOURCE TESTED; FULL RUN PENDING**. This is
 technical audit evidence, not manuscript text. Jobs 26122/26124 were cancelled
 and preserved when this review found N037/N038. Final
 run hashes are withheld until the corresponding gates pass.
@@ -83,7 +83,7 @@ promoted by the pipeline.
 | N050 | Utility, six-hour DCA and early-warning paths still accepted finite scores outside `[0,1]`, and Utility threshold parsing was not fail-closed. | Reuse the shared probability/outcome gates at every decision boundary and require a finite Utility threshold in `[0,1]`. | Four negative decision-path oracles added; accumulated CEDIA test required. |
 | N051 | Hash validation did not prove OOF identity/folds against source artifacts or reproduce primary report values from the serialized prediction artifact. | Re-read serialized OOF before reporting; compare identity/folds/thresholds to features, folds and nested selection; reproduce AUROC/AP/PR-AUC/Brier before final promotion. | Final-validator interface oracles added; accumulated CEDIA test required. |
 | N052 | Several outcome paths converted to integer before validation, and longitudinal decision helpers did not share an independent chronology/persistence gate. | Validate before conversion in calibration, folds, summaries, transport and inference; share one exact binary/time/persistence gate across Utility, six-hour decisions and alarms. | Fractional target/score, onset chronology and nonpersistent-label oracles added; accumulated CEDIA test required. |
-| N053 | Two focused unit fixtures used two folds without declaring that synthetic policy, so the new production five-fold gate correctly rejected them. | Scope `outer_folds=2` only inside those two fixtures; production policy and assertions remain five. | Job 26221 preserved as failed evidence; corrected accumulated suite required. |
+| N053 | Two focused unit fixtures used two folds without declaring that synthetic policy, so the new production five-fold gate correctly rejected them. | Scope `outer_folds=2` only inside those two fixtures; production policy and assertions remain five. | Job 26221 preserved as failed evidence; corrected job 26223 passed 40/40. |
 
 No item in this table is `CLOSED` until the updated suite, complete run and
 independent post-run audit pass on `compute-0-2`.

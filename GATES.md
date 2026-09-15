@@ -9,14 +9,14 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26221 ran 40 tests and failed only two undeclared two-fold fixtures after the strengthened production fold gate; N053 fixture correction has local compile/diff checks pending one accumulated rerun.
+- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 26223 passed 40/40 in 14.643 s on compute-0-2 for commit 0e469cb and source inventory 0040edc0, including N041-N053; failed fixture run 26221 remains preserved.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: runs 26122/26124 were cancelled after N037/N038 and 26130 was cancelled at explicit user direction before final source corrections; run 25832 remains superseded by N036.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: N036-N040 are tested; N041-N053 require the corrected accumulated preflight suite, then all affected items require one complete rerun plus independent artifact validation before closure.
+  EVIDENCE: N036-N053 are tested; all affected scientific items require one complete rerun plus independent artifact validation before closure.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.
