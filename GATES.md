@@ -10,13 +10,13 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26128 passed 41/41 for N036-N040; accumulated N041-N052 source has local compile, shell-syntax and diff checks only until the final preflight suite runs.
+  EVIDENCE: job 26221 ran 40 tests and failed only two undeclared two-fold fixtures after the strengthened production fold gate; N053 fixture correction has local compile/diff checks pending one accumulated rerun.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: runs 26122/26124 were cancelled after N037/N038 and 26130 was cancelled at explicit user direction before final source corrections; run 25832 remains superseded by N036.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: N036-N040 are tested; N041-N052 require the accumulated preflight suite, then all affected items require one complete rerun plus independent artifact validation before closure.
+  EVIDENCE: N036-N040 are tested; N041-N053 require the corrected accumulated preflight suite, then all affected items require one complete rerun plus independent artifact validation before closure.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
   EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.
@@ -40,4 +40,4 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: pending experimental reporting audit; no paper text will be drafted.
 
 - [x] G11: every active tracked source file and every cross-file scientific interface has a recorded line-by-line review with zero unrecorded scientific defects
-  EVIDENCE: docs/LINE_BY_LINE_SCIENTIFIC_AUDIT.md records the complete active-source ranges and cross-file traces through N052; the final pre-compute reread corrected N041-N052 before any replacement run, including resource sizing, policy provenance, historical isolation, cache/selection gates, validation-before-conversion, exact decision boundaries and OOF-to-report traceability. Binary raw data and withdrawn historical outputs are checked by identity/isolation rather than treated as active scientific inputs.
+  EVIDENCE: docs/LINE_BY_LINE_SCIENTIFIC_AUDIT.md records the complete active-source ranges and cross-file traces through N053; the final pre-compute reread corrected N041-N052 and the accumulated suite exposed/corrected N053 before any replacement full run. Binary raw data and withdrawn historical outputs are checked by identity/isolation rather than treated as active scientific inputs.

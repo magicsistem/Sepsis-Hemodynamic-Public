@@ -631,8 +631,9 @@ class ScientificPipelineTests(unittest.TestCase):
             "Age": np.arange(6.0), "Hct_last_obs": np.arange(10.0, 16.0), "HR_cv_8h": np.arange(20.0, 26.0),
         })
         folds = pd.DataFrame({"Patient_ID": features["Patient_ID"], "SepsisLabel": features["SepsisLabel"], "Fold": [0, 0, 0, 1, 1, 1]})
-        control, columns = pipeline.matched_permutation_control(features, folds)
-        second, second_columns = pipeline.matched_permutation_control(features, folds)
+        with mock.patch.dict(pipeline.MODEL_POLICY, {"outer_folds": 2}):
+            control, columns = pipeline.matched_permutation_control(features, folds)
+            second, second_columns = pipeline.matched_permutation_control(features, folds)
         self.assertEqual(columns, second_columns)
         pd.testing.assert_frame_equal(control, second)
         self.assertEqual(control["Age"].tolist(), features["Age"].tolist())
@@ -799,6 +800,7 @@ class ScientificPipelineTests(unittest.TestCase):
                 return np.column_stack([np.full(len(values), 0.5), np.full(len(values), 0.5)])
 
         with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.dict(pipeline.MODEL_POLICY, {"outer_folds": 2}), \
              mock.patch.object(pipeline, "select_inner_model", side_effect=selected), \
              mock.patch.object(pipeline, "fitted_platt", side_effect=calibrator), \
              mock.patch.object(pipeline, "fitted_six_hour_calibrator", side_effect=dca_calibrator), \
