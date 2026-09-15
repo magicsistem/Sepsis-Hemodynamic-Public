@@ -2,10 +2,10 @@
 
 Status: **IN PROGRESS**. This is an evidence map, not manuscript text. Run
 `20260911T185228Z-bb3e353` (Slurm 25832) completed but was superseded when the
-independent audit found N036 in its DCA probability estimand. Job 26121 passed
-41/41 tests for that correction; job 26122 was then cancelled and preserved
-when the continuing audit found N037. Numerical results remain blocked until
-the next corrected run and its independent audit pass.
+independent audit found N036 in its DCA probability estimand. Jobs 26122 and
+26124 were then cancelled and preserved when the continuing audit found
+N037–N040. Numerical results remain blocked until the next corrected run and
+its independent audit pass.
 
 ## Evidence authority
 
@@ -42,6 +42,8 @@ The request's “sources” means the project's source files as a whole; no lite
 - `bb3e353`: stabilized calibration inference; job 25832 completed but its DCA is superseded by N036.
 - `eeaea78`: added nested six-hour-outcome calibration for DCA; job 26121 passed 41/41 tests.
 - `8e84bee`: records the N036 test gate; job 26122 was cancelled after N037 was found.
+- `940b00c`: uses observed decision rows for alarm-rate exposure and hashes the fixed DCA grid/horizon.
+- `f39bf14`: makes alarm-episode categories exhaustive, including left-censored/unidentifiable timing.
 
 All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`; no historical run is promoted merely because an intermediate job or test job says PASS.
 
@@ -53,8 +55,8 @@ All cancelled/failed chains remain historical evidence in `logs/run_ledger.tsv`;
 | Test jobs before 25587 | HISTORICAL PASS — SUPERSEDED | Each was a preflight for an older source commit and did not produce a complete final run. |
 | Failed/cancelled full jobs 25321, 25423, 25457, 25459, 25463, 25498 | HISTORICAL RUN — FAILED/CANCELLED | The ledger and Slurm retain terminal state; no final manifest was promoted. |
 | G1 | CURRENT PASS | Exhaustive private ledger remains locally excluded from Git. |
-| G2 | CURRENT PASS | Job 26121 passed 41/41 for scientific code commit `eeaea78`; `8e84bee` changes gate evidence only. |
-| G3–G5 | PENDING | Run 26122 is cancelled historical evidence; no final result is accepted before a new manifest validation and independent audit. |
+| G2 | PENDING CURRENT SOURCE | Job 26123 passed 41/41 through N037; N038–N040 require the next CEDIA suite. |
+| G3–G5 | PENDING | Runs 26122/26124 are cancelled historical evidence; no final result is accepted before a new manifest validation and independent audit. |
 | G6–G11 | IN PROGRESS | Whole-source audit, reconstruction, reporting inventory and final traceability remain open. |
 
 ## Implemented pipeline inventory

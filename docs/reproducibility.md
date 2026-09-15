@@ -35,7 +35,9 @@ it is never labelled a fixed-horizon outcome. Fixed early-warning events use
 the reconstructed onset and the policy-fixed useful window `[onset-12h,
 onset-1h]`. Only a negative-to-positive crossing opens an alarm episode;
 continuous persistence cannot become a later useful warning after the six-hour
-refractory interval.
+refractory interval. Alarm rates divide by actual observed decision rows, not
+the elapsed ICULOS span; useful, remote-false, late-pre-onset, post-onset, and
+left-censored-unclassifiable episodes remain separate categories.
 
 Reported discrimination includes AUROC, sklearn Average Precision, and
 trapezoidal PR-AUC as distinct estimands. Row-time calibration includes Brier,
