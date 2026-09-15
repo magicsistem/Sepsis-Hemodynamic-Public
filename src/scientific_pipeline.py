@@ -41,7 +41,7 @@ from sklearn.preprocessing import StandardScaler
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
 
-PIPELINE_VERSION = "scientific-pipeline-v2"
+PIPELINE_VERSION = "scientific-pipeline-v3"
 SEED = 20260906
 OFFICIAL_UTILITY_SHA256 = "26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5"
 DATA_POLICY = {
@@ -71,8 +71,10 @@ FEATURE_POLICY = {
     "rolling_min_observations": 2,
     "sampen": {"window_hours": 24, "m": 2, "r_factor": 0.2, "min_observations": 4},
     "early_warning": {"start_hours_before_onset": 12, "end_hours_before_onset": 1, "refractory_hours": 6},
-    "calibration": "pre-specified_platt_nested_inner_oof",
+    "calibration": "fixed_nested_inner_oof_sigmoid_on_raw_probability",
     "calibration_fit_weighting": "equal total weight per patient",
+    "dca_calibration": "nested_inner_oof_sigmoid_for_pre_onset_six_hour_outcome",
+    "dca_calibration_fit_weighting": "each eligible observed decision hour equally weighted",
     "ece_equal_width_bins": 10,
     "calibration_patient_cluster_bootstrap_repeats": 300,
     "dca_patient_cluster_bootstrap_repeats": 300,
@@ -603,7 +605,8 @@ MODEL_CANDIDATES = (
 
 OOF_OUTPUT_COLUMNS = [
     "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel", "TrueSepsisOnset_ICULOS",
-    "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt", "nested_threshold",
+    "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt",
+    "prob_onset_within_6h_nested", "nested_threshold",
 ]
 
 
@@ -649,25 +652,78 @@ def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, A
         fit_xgb(model, fit, columns)
         valid["inner_prob_raw"] = model.predict_proba(matrix(valid, columns))[:, 1]
         valid["InnerFold"] = inner_fold
-        inner_rows.append(valid[["Patient_ID", "ICULOS", "SepsisLabel", "inner_prob_raw", "InnerFold"]])
+        inner_rows.append(valid[[
+            "Patient_ID", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS",
+            "OnsetReconstructionStatus", "inner_prob_raw", "InnerFold",
+        ]])
     inner_oof = pd.concat(inner_rows, ignore_index=True)
     if inner_oof.duplicated(["Patient_ID", "ICULOS"]).any() or len(inner_oof) != len(train):
         raise PipelineError("Nested inner OOF predictions do not cover outer-train rows exactly once")
     return winner, selected_rounds, inner_oof
 
 
-def fitted_platt(inner_oof: pd.DataFrame, split_seed: int = SEED) -> LogisticRegression:
-    y = inner_oof["SepsisLabel"].to_numpy(dtype=int)
+def fitted_sigmoid_calibrator(
+    frame: pd.DataFrame,
+    score_column: str,
+    target_column: str,
+    split_seed: int = SEED,
+    patient_balanced: bool = True,
+) -> LogisticRegression:
+    y = frame[target_column].to_numpy(dtype=int)
     if set(y) != {0, 1}:
         raise PipelineError("Nested calibration requires both classes in inner OOF predictions")
     calibrator = LogisticRegression(C=1e6, solver="lbfgs", max_iter=1000, random_state=split_seed)
-    calibrator.fit(inner_oof["inner_prob_raw"].to_numpy(dtype=float).reshape(-1, 1), y, sample_weight=equal_patient_weights(inner_oof))
+    calibrator.fit(
+        frame[score_column].to_numpy(dtype=float).reshape(-1, 1),
+        y,
+        sample_weight=equal_patient_weights(frame) if patient_balanced else None,
+    )
     return calibrator
+
+
+def fitted_platt(inner_oof: pd.DataFrame, split_seed: int = SEED) -> LogisticRegression:
+    """Fit the fixed sigmoid calibrator to raw probability outputs."""
+    return fitted_sigmoid_calibrator(inner_oof, "inner_prob_raw", "SepsisLabel", split_seed)
 
 
 def platt_probabilities(calibrator: LogisticRegression, probability: Any) -> np.ndarray:
     """Apply the one-dimensional nested calibrator without DataFrame-name coupling."""
     return calibrator.predict_proba(np.asarray(probability, dtype=float).reshape(-1, 1))[:, 1]
+
+
+def six_hour_decision_frame(frame: pd.DataFrame, probability_column: str) -> tuple[pd.DataFrame, int]:
+    """Return eligible pre-onset decision hours and their fixed six-hour outcome."""
+    required = {"Patient_ID", "ICULOS", "SepsisLabel", "TrueSepsisOnset_ICULOS", probability_column}
+    if missing := required.difference(frame.columns):
+        raise PipelineError(f"Six-hour decision analysis requires {sorted(missing)}")
+    decision_frames = []
+    left_censored_septic = 0
+    for patient_id, patient in frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").groupby("Patient_ID", sort=False):
+        onset = patient["TrueSepsisOnset_ICULOS"].dropna().unique()
+        if len(onset) > 1:
+            raise PipelineError(f"Patient {patient_id} has inconsistent reconstructed sepsis onset")
+        septic = bool(patient["SepsisLabel"].max())
+        if septic and not len(onset):
+            left_censored_septic += 1
+            continue
+        at_risk = patient["ICULOS"] < float(onset[0]) if septic else pd.Series(True, index=patient.index)
+        eligible = patient.loc[at_risk, ["ICULOS", probability_column]].copy()
+        eligible["Patient_ID"] = patient_id
+        hours_to_onset = float(onset[0]) - eligible["ICULOS"].to_numpy(dtype=float) if septic else np.full(len(eligible), np.inf)
+        eligible["outcome_onset_within_6h"] = ((hours_to_onset > 0) & (hours_to_onset <= 6)).astype(int)
+        eligible["probability"] = eligible.pop(probability_column).astype(float)
+        decision_frames.append(eligible[["Patient_ID", "outcome_onset_within_6h", "probability"]])
+    decisions = pd.concat(decision_frames, ignore_index=True) if decision_frames else pd.DataFrame()
+    if decisions.empty or not np.isfinite(decisions["probability"]).all():
+        raise PipelineError("Cannot construct six-hour decisions without finite probabilities")
+    return decisions, left_censored_septic
+
+
+def fitted_six_hour_calibrator(inner_oof: pd.DataFrame, split_seed: int = SEED) -> LogisticRegression:
+    decisions, _ = six_hour_decision_frame(inner_oof, "inner_prob_raw")
+    return fitted_sigmoid_calibrator(
+        decisions, "probability", "outcome_onset_within_6h", split_seed, patient_balanced=False
+    )
 
 
 def threshold_from_inner_oof(inner_oof: pd.DataFrame, probability_column: str) -> float:
@@ -1074,24 +1130,9 @@ def temporal_stratified_metrics(frame: pd.DataFrame, probability_column: str) ->
 def decision_curve(frame: pd.DataFrame, probability_column: str, thresholds: Iterable[float]) -> list[dict[str, Any]]:
     """DCA for assessment now when true sepsis onset is within six hours."""
     rows: list[dict[str, Any]] = []
-    decision_frames = []
-    left_censored_septic = 0
-    for patient_id, patient in frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").groupby("Patient_ID", sort=False):
-        onset = patient["TrueSepsisOnset_ICULOS"].dropna().unique()
-        septic = bool(patient["SepsisLabel"].max())
-        if septic and not len(onset):
-            left_censored_septic += 1
-            continue
-        at_risk = patient["ICULOS"] < float(onset[0]) if septic else pd.Series(True, index=patient.index)
-        eligible = patient.loc[at_risk, ["ICULOS", probability_column]].copy()
-        eligible["Patient_ID"] = patient_id
-        hours_to_onset = float(onset[0]) - eligible["ICULOS"].to_numpy(dtype=float) if septic else np.full(len(eligible), np.inf)
-        eligible["outcome_onset_within_6h"] = ((hours_to_onset > 0) & (hours_to_onset <= 6)).astype(int)
-        eligible["probability"] = eligible.pop(probability_column).astype(float)
-        decision_frames.append(eligible[["Patient_ID", "outcome_onset_within_6h", "probability"]])
-    decisions = pd.concat(decision_frames, ignore_index=True) if decision_frames else pd.DataFrame()
-    if decisions.empty or set(decisions["outcome_onset_within_6h"]) != {0, 1} or not np.isfinite(decisions["probability"]).all():
-        raise PipelineError("Cannot compute six-hour DCA without finite probabilities and both outcome classes")
+    decisions, left_censored_septic = six_hour_decision_frame(frame, probability_column)
+    if set(decisions["outcome_onset_within_6h"]) != {0, 1}:
+        raise PipelineError("Cannot compute six-hour DCA without both outcome classes")
     truth = decisions["outcome_onset_within_6h"].to_numpy(dtype=int)
     probability = decisions["probability"].to_numpy(dtype=float)
     codes, patients = pd.factorize(decisions["Patient_ID"], sort=True)
@@ -1157,10 +1198,12 @@ def outer_oof(
         calibrator = fitted_platt(inner_oof, split_seed)
         inner_oof["inner_prob_platt"] = platt_probabilities(calibrator, inner_oof["inner_prob_raw"])
         threshold = threshold_from_inner_oof(inner_oof, "inner_prob_platt")
+        dca_calibrator = fitted_six_hour_calibrator(inner_oof, split_seed)
         model = xgb_model(candidate, split_seed + int(outer_fold), gpu, selected_rounds)
         fit_xgb(model, outer_train, columns)
         outer_test["prob_raw"] = model.predict_proba(matrix(outer_test, columns))[:, 1]
         outer_test["prob_platt"] = platt_probabilities(calibrator, outer_test["prob_raw"])
+        outer_test["prob_onset_within_6h_nested"] = platt_probabilities(dca_calibrator, outer_test["prob_raw"])
         outer_test["nested_threshold"] = threshold
         records.append(outer_test[OOF_OUTPUT_COLUMNS])
         selection_rows.append({
@@ -1174,7 +1217,9 @@ def outer_oof(
                 inner_oof[["Patient_ID", "InnerFold"]].drop_duplicates().sort_values("Patient_ID").to_dict("records")
             ),
             "final_model_seed": split_seed + int(outer_fold),
-            "calibrator": "pre-specified_platt_fit_on_inner_oof_only",
+            "calibrator": "fixed_sigmoid_on_raw_probability_fit_on_inner_oof_only",
+            "dca_calibrator": "sigmoid_for_pre_onset_six_hour_outcome_fit_on_inner_oof_only",
+            "dca_calibration_fit_weighting": "each eligible observed decision hour equally weighted",
             "nested_threshold_from_inner_oof_only": threshold,
             "outer_train_patient_count": len(train_patients),
             "outer_test_patient_count": len(test_patients),
@@ -1264,7 +1309,7 @@ def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path, persist_art
         reliability = reliability_rows(y, raw, variant, "raw") + reliability_rows(y, calibrated, variant, "platt_nested")
         atomic_csv(pd.DataFrame(reliability), output_dir / f"{variant}_reliability.csv")
         atomic_csv(
-            pd.DataFrame(decision_curve(oof, "prob_platt", np.arange(0.05, 0.51, 0.05))),
+            pd.DataFrame(decision_curve(oof, "prob_onset_within_6h_nested", np.arange(0.05, 0.51, 0.05))),
             output_dir / f"{variant}_dca.csv",
         )
     return metrics
@@ -1563,17 +1608,17 @@ def validate_final_manifest(run_dir: Path, allow_pending: bool = False) -> dict[
             raise PipelineError(f"Final {variant} OOF artifact contains redundant or missing columns")
         if not (oof.groupby("Patient_ID")["Fold"].nunique() == 1).all():
             raise PipelineError("Final OOF fold provenance is invalid")
-        if not np.isfinite(oof[["prob_raw", "prob_platt", "nested_threshold"]].to_numpy(dtype=float)).all():
+        if not np.isfinite(oof[["prob_raw", "prob_platt", "prob_onset_within_6h_nested", "nested_threshold"]].to_numpy(dtype=float)).all():
             raise PipelineError("Final OOF contains non-finite scores or nested thresholds")
         identity = oof[["Patient_ID", "ICULOS", "SepsisLabel"]].sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
         if not identity.equals(feature_identity.sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)):
             raise PipelineError(f"Final {variant} OOF identity does not match the feature cohort")
         oof_identities.append(identity)
         selection = pd.read_csv(run_dir / f"{variant}_nested_selection.csv")
-        if len(selection) != 5 or set(selection["outer_fold"]) != set(range(5)) or not {"inner_fold_patient_hash", "calibrator", "nested_threshold_from_inner_oof_only"}.issubset(selection.columns):
+        if len(selection) != 5 or set(selection["outer_fold"]) != set(range(5)) or not {"inner_fold_patient_hash", "calibrator", "dca_calibrator", "nested_threshold_from_inner_oof_only"}.issubset(selection.columns):
             raise PipelineError(f"Final {variant} nested-selection provenance is invalid")
         dca = pd.read_csv(run_dir / f"{variant}_dca.csv")
-        if len(dca) != 10 or not np.allclose(dca["threshold_probability"], np.arange(0.05, 0.51, 0.05)) or set(dca["estimand_unit"]) != {"observed pre-onset decision hour"}:
+        if len(dca) != 10 or not np.allclose(dca["threshold_probability"], np.arange(0.05, 0.51, 0.05)) or set(dca["estimand_unit"]) != {"observed pre-onset decision hour"} or set(dca["probability_source"]) != {"prob_onset_within_6h_nested"}:
             raise PipelineError(f"Final {variant} DCA artifact is invalid")
         reliability = pd.read_csv(run_dir / f"{variant}_reliability.csv")
         if len(reliability) != 20 or set(reliability["probability_kind"]) != {"raw", "platt_nested"} or set(reliability["bin"]) != set(range(10)):
@@ -1767,7 +1812,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
             f"{variant}_oof_predictions.csv",
             {"features.csv": features_node["sha256"], "folds.csv": folds_node["sha256"]},
             "src.scientific_pipeline:outer_oof",
-            ("nested_model_selection_v1", "nested_platt_calibration_v1", "nested_utility_threshold_v1"),
+            ("nested_model_selection_v1", "nested_probability_sigmoid_calibration_v1", "nested_six_hour_dca_calibration_v1", "nested_utility_threshold_v1"),
         )
         for variant in ("baseline", "enhanced")
     }
@@ -1775,7 +1820,7 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
         "metrics.json": ("auroc_sklearn", "average_precision_sklearn", "trapezoidal_pr_auc", "official_physionet_2019_utility", "ece_equal_width_10", "brier", "calibration_in_the_large_slope_fixed_1", "calibration_intercept_and_slope"),
         "early_warning_patients.csv": ("onset_anchored_early_warning_12_to_1h", "alarm_refractory_6h"),
         "reliability.csv": ("reliability_equal_width_10",),
-        "dca.csv": ("pre_onset_decision_hour_six_hour_net_benefit_patient_cluster_uncertainty_v2",),
+        "dca.csv": ("pre_onset_decision_hour_six_hour_net_benefit_patient_cluster_uncertainty_v3",),
         "temporal_strata.csv": ("time_since_icu_and_true_onset_strata_v1",),
         "age_subgroups.csv": ("age_v1_left_closed_50_70",),
     }

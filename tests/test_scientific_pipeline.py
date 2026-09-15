@@ -298,6 +298,27 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("model_net_benefit_ci_95_low", row)
         self.assertEqual(row["uncertainty_unit"], "patient-cluster bootstrap")
 
+    def test_dca_probability_is_calibrated_on_inner_pre_onset_six_hour_targets(self):
+        inner = pd.DataFrame({
+            "Patient_ID": ["A:septic"] * 5 + ["A:negative"] * 2 + ["A:left"] * 2,
+            "ICULOS": [1, 2, 3, 4, 5, 1, 2, 1, 2],
+            "SepsisLabel": [1] * 5 + [0, 0] + [1, 1],
+            "TrueSepsisOnset_ICULOS": [4.0] * 5 + [math.nan] * 4,
+            "inner_prob_raw": np.linspace(0.1, 0.9, 9),
+        })
+        decisions, excluded = pipeline.six_hour_decision_frame(inner, "inner_prob_raw")
+        self.assertEqual(excluded, 1)
+        self.assertEqual(set(decisions["Patient_ID"]), {"A:septic", "A:negative"})
+        self.assertEqual(decisions.groupby("Patient_ID")["outcome_onset_within_6h"].sum().to_dict(), {"A:negative": 0, "A:septic": 3})
+        inconsistent = inner.copy()
+        inconsistent.loc[1, "TrueSepsisOnset_ICULOS"] = 5.0
+        with self.assertRaisesRegex(pipeline.PipelineError, "inconsistent reconstructed sepsis onset"):
+            pipeline.six_hour_decision_frame(inconsistent, "inner_prob_raw")
+        with mock.patch.object(pipeline, "fitted_sigmoid_calibrator", return_value=object()) as fit:
+            pipeline.fitted_six_hour_calibrator(inner)
+        self.assertEqual(fit.call_args.args[1:4], ("probability", "outcome_onset_within_6h", pipeline.SEED))
+        self.assertFalse(fit.call_args.kwargs["patient_balanced"])
+
     def test_alarm_burden_reports_observed_time_and_refractory_episodes(self):
         septic_times = list(range(1, 21))
         frame = pd.DataFrame({
@@ -364,7 +385,8 @@ class ScientificPipelineTests(unittest.TestCase):
                 rows.append({
                     "Patient_ID": f"A:p{patient:03d}", "ICULOS": hour,
                     "SepsisLabel": label, "TrueSepsisOnset_ICULOS": 4.0 if septic else math.nan,
-                    "prob_raw": probability, "prob_platt": probability, "nested_threshold": 0.5,
+                    "prob_raw": probability, "prob_platt": probability,
+                    "prob_onset_within_6h_nested": probability, "nested_threshold": 0.5,
                 })
         oof = pd.DataFrame(rows)
         with tempfile.TemporaryDirectory() as directory:
@@ -661,6 +683,7 @@ class ScientificPipelineTests(unittest.TestCase):
         ], ignore_index=True)
         folds = pd.DataFrame({"Patient_ID": [f"A:p{index}" for index in range(4)], "SepsisLabel": [index % 2 for index in range(4)], "Fold": [0, 1, 0, 1]})
         calibrated_patients = []
+        dca_calibrated_patients = []
 
         def selected(train, columns, gpu, outer_fold, split_seed=pipeline.SEED):
             inner = train[["Patient_ID", "ICULOS", "SepsisLabel"]].copy()
@@ -672,6 +695,10 @@ class ScientificPipelineTests(unittest.TestCase):
             calibrated_patients.append(set(inner["Patient_ID"]))
             return object()
 
+        def dca_calibrator(inner, split_seed=pipeline.SEED):
+            dca_calibrated_patients.append(set(inner["Patient_ID"]))
+            return object()
+
         class Model:
             def predict_proba(self, values):
                 return np.column_stack([np.full(len(values), 0.5), np.full(len(values), 0.5)])
@@ -679,12 +706,14 @@ class ScientificPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              mock.patch.object(pipeline, "select_inner_model", side_effect=selected), \
              mock.patch.object(pipeline, "fitted_platt", side_effect=calibrator), \
+             mock.patch.object(pipeline, "fitted_six_hour_calibrator", side_effect=dca_calibrator), \
              mock.patch.object(pipeline, "platt_probabilities", side_effect=lambda _, p: np.full(len(p), 0.5)), \
              mock.patch.object(pipeline, "threshold_from_inner_oof", return_value=0.5), \
              mock.patch.object(pipeline, "xgb_model", return_value=Model()), \
              mock.patch.object(pipeline, "fit_xgb"):
             pipeline.outer_oof(features, folds, "baseline", Path(directory), {"available": False}, persist_oof=False)
         self.assertEqual(calibrated_patients, [{"A:p1", "A:p3"}, {"A:p0", "A:p2"}])
+        self.assertEqual(dca_calibrated_patients, calibrated_patients)
 
     def test_data_license_notice_distinguishes_local_repackaging(self):
         root = Path(__file__).resolve().parents[1]

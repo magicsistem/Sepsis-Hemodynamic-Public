@@ -10,16 +10,16 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 25761 failed closed on two incorrect fixtures (N033); corrected suite has not yet passed on CEDIA.
+  EVIDENCE: job 25831 passed 40/40 for commit bb3e353; N036 adds a new DCA calibration oracle, so the current suite still requires CEDIA execution.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: run 25587 is historical; run 25746 was intentionally cancelled after N016 was found and is retained as a superseded attempt.
+  EVIDENCE: run 20260911T185228Z-bb3e353, job 25832, completed 0:0 on compute-0-2 with a validated 53-file package, but is superseded because N036 invalidates its DCA probability estimand.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: B09, M23, M175, and N011-N033 are reopened until corrected test and run evidence exists.
+  EVIDENCE: B09, M23, M175, N011-N035 have run 25832 evidence, but N036 is implemented and requires tests, a complete rerun, and artifact validation before closure.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
-  EVIDENCE: prior independent audit is historical after N011-N032; repeat after a corrected full run.
+  EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.
 
 
 ## Gates: methodology and results reconstruction
@@ -28,7 +28,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: pending line-by-line source and reachability audit.
 
 - [ ] G7: the current corrected rerun is independently revalidated and every reported number maps to a hash-verified artifact
-  EVIDENCE: pending corrected rerun after N016-N032.
+  EVIDENCE: pending corrected rerun after N036.
 
 - [ ] G8: the master result table includes every executed current model, calibration, transport, stability, subgroup, temporal, DCA, inference, and ablation result
   EVIDENCE: pending corrected rerun artifact inventory; no manuscript is in scope.
