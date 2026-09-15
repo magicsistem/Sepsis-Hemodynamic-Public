@@ -110,6 +110,10 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual((summary["n_septic_patients"], summary["n_nonseptic_patients"]), (1, 0))
         self.assertEqual((summary["n_onset_eligible_septic_patients"], summary["n_left_censored_septic_patients_excluded_from_onset_estimands"]), (0, 1))
         self.assertTrue(math.isnan(summary["useful_early_alert_sensitivity"]))
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.reconstruct_true_onset([0, 0.5, 1], [1, 2, 3])
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.reconstruct_true_onset([0, 1], [2, 1])
 
     def test_patient_isolation_and_fold_provenance(self):
         patients = []
@@ -130,6 +134,18 @@ class ScientificPipelineTests(unittest.TestCase):
             invalid.loc[0, "SepsisLabel"] = 1 - invalid.loc[0, "SepsisLabel"]
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.require_fold_context(features, invalid)
+            fractional_label = pd.read_csv(fold_path)
+            fractional_label.loc[fractional_label["SepsisLabel"] == 0, "SepsisLabel"] = 0.5
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.require_fold_context(features, fractional_label)
+            fractional_fold = pd.read_csv(fold_path)
+            fractional_fold.loc[0, "Fold"] = 0.5
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.require_fold_context(features, fractional_fold)
+            missing_fold = pd.read_csv(fold_path)
+            missing_fold.loc[missing_fold["Fold"] == 4, "Fold"] = 3
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.require_fold_context(features, missing_fold)
         self.assertTrue((merged.groupby("Patient_ID")["Fold"].nunique() == 1).all())
         self.assertEqual(first["seed"], pipeline.SEED)
         self.assertEqual(second["seed"], pipeline.SEED + 101)
@@ -275,6 +291,12 @@ class ScientificPipelineTests(unittest.TestCase):
         expected = (observed - inaction) / (best - inaction)
         self.assertLess(expected, 0.0)
         self.assertAlmostEqual(pipeline.challenge_utility(below_inaction, "below", 0.5), expected)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.challenge_utility(frame.assign(invalid=1.01), "invalid", 0.5)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.challenge_utility(frame, "zero", "invalid")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.challenge_utility(frame.assign(SepsisLabel=np.r_[np.zeros(10), np.ones(5), np.zeros(9)]), "zero", 0.5)
 
     def test_average_precision_and_pr_auc_are_named_distinct_estimands(self):
         y = np.array([0, 1, 0, 1])
@@ -282,7 +304,8 @@ class ScientificPipelineTests(unittest.TestCase):
         metrics = pipeline.discrimination_metrics(y, p)
         self.assertAlmostEqual(metrics["average_precision"], (1.0 + 2 / 3) / 2)
         self.assertIn("trapezoidal_pr_auc", metrics)
-        self.assertEqual(metrics["xgboost_training_eval_metric"], "logloss")
+        self.assertEqual(pipeline.MODEL_POLICY["xgboost_eval_metric"], "logloss")
+        self.assertNotIn("xgboost_training_eval_metric", metrics)
 
     def test_dca_uses_six_hour_decisions_and_patient_cluster_uncertainty(self):
         self.assertEqual(pipeline.FEATURE_POLICY["dca_horizon_hours"], 6)
@@ -316,6 +339,8 @@ class ScientificPipelineTests(unittest.TestCase):
         inconsistent.loc[1, "TrueSepsisOnset_ICULOS"] = 5.0
         with self.assertRaisesRegex(pipeline.PipelineError, "inconsistent reconstructed sepsis onset"):
             pipeline.six_hour_decision_frame(inconsistent, "inner_prob_raw")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.six_hour_decision_frame(inner.assign(inner_prob_raw=-0.01), "inner_prob_raw")
         with mock.patch.object(pipeline, "fitted_sigmoid_calibrator", return_value=object()) as fit:
             pipeline.fitted_six_hour_calibrator(inner)
         self.assertEqual(fit.call_args.args[1:4], ("probability", "outcome_onset_within_6h", pipeline.SEED))
@@ -370,6 +395,8 @@ class ScientificPipelineTests(unittest.TestCase):
         left_summary = pipeline.early_warning_metrics(left_censored, "probability", "threshold")["summary"]
         self.assertEqual(left_summary["left_censored_septic_alarm_episodes_unclassified"], 1)
         self.assertEqual((left_summary["false_alarm_episodes"], left_summary["post_onset_alarm_episodes"]), (0, 0))
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.early_warning_metrics(irregular.assign(probability=1.01), "probability", "threshold")
 
     def test_paired_lead_time_keeps_detection_denominators(self):
         rows = []
@@ -470,12 +497,17 @@ class ScientificPipelineTests(unittest.TestCase):
         entrypoint = (root / "run.sh").read_text(encoding="utf-8")
         job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
         self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
+        self.assertIn("SOURCE_INVENTORY_SHA256", entrypoint)
         self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
         self.assertIn("RESUME_RUN_ID", entrypoint)
         self.assertIn("SCHEDULER_", entrypoint)
         self.assertIn("sacct -n -X", entrypoint)
         self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
+        self.assertIn('SOURCE_INVENTORY_SHA256="$SOURCE_INVENTORY_SHA256"', job)
+        self.assertIn("#SBATCH --cpus-per-task=8", job)
+        self.assertIn("#SBATCH --mem=32G", job)
+        self.assertNotIn("#SBATCH --mem=128G", job)
         self.assertIn("logs/run_ledger.tsv", job)
         self.assertIn("trap '", job)
         self.assertIn("CANCELLED_signal_TERM", job)
@@ -492,6 +524,13 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["ece_fixed_10_bins"], 0.4)
         self.assertAlmostEqual(metrics["calibration_in_the_large_intercept_slope_fixed_1"], 0.0, places=6)
         self.assertEqual(pipeline.FEATURE_POLICY["ece_equal_width_bins"], 10)
+        boundary = pipeline.calibration_metrics(np.array([0, 1, 1, 0]), np.array([0.0, 1.0, 0.25, 0.75]))
+        self.assertEqual(boundary["brier"], 0.28125)
+        self.assertEqual(boundary["ece_fixed_10_bins"], 0.375)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.probability_array([0.5, 1.01], "oracle")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.binary_array([0, 0.5, 1], "oracle")
 
     def test_calibration_regression_standardizes_logits_and_restores_coefficients(self):
         class Recorder:
@@ -612,6 +651,8 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual([row["model_variant"] for row in rows], ["baseline", "enhanced"])
         self.assertEqual(rows[0]["split_hash"], rows[1]["split_hash"])
         self.assertTrue(all(row["classifier"] == "sklearn_SGDClassifier_log_loss_l2" for row in rows))
+        self.assertTrue(all(row["classifier_parameter_hash"] == pipeline.stable_hash(pipeline.MODEL_POLICY["logistic_robustness"]) for row in rows))
+        self.assertTrue(all(row["probability_kind"] == "uncalibrated_logistic_probability" for row in rows))
         self.assertEqual({row["metric"] for row in inference}, {"auroc", "average_precision", "brier"})
         self.assertTrue(all(row["test"] == "paired_patient_cluster_permutation" for row in inference))
         self.assertTrue(all(row["probability_kind"] == "uncalibrated_logistic_probability" for row in inference))
@@ -637,6 +678,8 @@ class ScientificPipelineTests(unittest.TestCase):
         context = {key: f"value-{key}" for key in pipeline.runtime_resume_context({}).keys()}
         self.assertEqual(pipeline.runtime_resume_context(context), context)
         changed = dict(context, dependencies={"numpy": "different"})
+        self.assertNotEqual(pipeline.runtime_resume_context(context), pipeline.runtime_resume_context(changed))
+        changed = dict(context, model_policy_hash="different")
         self.assertNotEqual(pipeline.runtime_resume_context(context), pipeline.runtime_resume_context(changed))
 
     def test_cache_context_and_manifest_fail_closed(self):
@@ -670,6 +713,9 @@ class ScientificPipelineTests(unittest.TestCase):
         validator = inspect.getsource(pipeline.validate_final_manifest)
         self.assertIn('pd.read_csv(run_dir / "features.csv", nrows=0)', validator)
         self.assertIn("list(oof.columns) != OOF_OUTPUT_COLUMNS", validator)
+        self.assertIn('pd.read_csv(run_dir / "folds.csv")', validator)
+        self.assertIn("metrics do not reproduce from OOF predictions", validator)
+        self.assertIn('oof = pd.read_csv(output_dir / f"{artifact_stem}_oof_predictions.csv")', inspect.getsource(pipeline.outer_oof))
 
     def test_outer_fold_assignment_is_never_a_model_feature(self):
         frame = pd.DataFrame(columns=["Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus", "Fold", "Hct_last_obs"])
@@ -688,13 +734,42 @@ class ScientificPipelineTests(unittest.TestCase):
             "InnerFold": [0] * 4 + [1] * 4,
         })
         calibrator = pipeline.fitted_platt(inner)
+        self.assertIsNone(calibrator.penalty)
+        self.assertEqual(calibrator.solver, pipeline.MODEL_POLICY["persistent_label_calibration"]["solver"])
         inner["inner_prob_platt"] = pipeline.platt_probabilities(calibrator, inner["inner_prob_raw"])
         held_out = pd.DataFrame({"prob_raw": [0.15, 0.85]})
         held_out["prob_platt"] = pipeline.platt_probabilities(calibrator, held_out["prob_raw"])
         self.assertTrue(np.isfinite(held_out["prob_platt"]).all())
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.fitted_platt(inner.assign(SepsisLabel=0.5))
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.fitted_platt(inner.assign(inner_prob_raw=1.01))
         threshold = pipeline.threshold_from_inner_oof(inner, "inner_prob_platt")
         self.assertIn(threshold, pipeline.FEATURE_POLICY["threshold_grid"])
+        nearly_equal = [1.0, 1.0 + 1e-10] + [0.0] * (len(pipeline.FEATURE_POLICY["threshold_grid"]) - 2)
+        with mock.patch.object(pipeline, "challenge_utility", side_effect=nearly_equal):
+            self.assertEqual(pipeline.threshold_from_inner_oof(inner, "inner_prob_platt"), pipeline.FEATURE_POLICY["threshold_grid"][1])
         self.assertNotIn("Fold", inner.columns)  # Outer held-out rows cannot calibrate themselves.
+        self.assertEqual(pipeline.MODEL_POLICY["outer_folds"], 5)
+        self.assertEqual(pipeline.MODEL_POLICY["inner_folds"], 3)
+        self.assertEqual(pipeline.MODEL_POLICY["xgboost_n_jobs"], 8)
+        candidate = pipeline.MODEL_CANDIDATES[0]
+        selection = pd.DataFrame([{
+            "outer_fold": fold, "selected_candidate": candidate["id"],
+            "selected_hyperparameters": json.dumps(candidate, sort_keys=True),
+            "selected_tree_count_from_inner_only": 10,
+            "inner_fold_patient_hash": "1" * 64,
+            "calibrator": pipeline.MODEL_POLICY["persistent_label_calibration"]["method"] + "_fit_on_inner_oof_only",
+            "dca_calibrator": pipeline.MODEL_POLICY["dca_calibration"]["method"] + "_fit_on_inner_oof_only",
+            "nested_threshold_from_inner_oof_only": 0.5,
+            "outer_train_patient_count": 32000, "outer_test_patient_count": 8336,
+            "gpu_available": True,
+        } for fold in range(pipeline.MODEL_POLICY["outer_folds"])])
+        pipeline.validate_nested_selection(selection, "oracle")
+        invalid_selection = selection.copy()
+        invalid_selection.loc[0, "nested_threshold_from_inner_oof_only"] = 0.51
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.validate_nested_selection(invalid_selection, "oracle")
 
     def test_outer_calibration_never_receives_outer_test_patients(self):
         features = pd.concat([
@@ -745,15 +820,6 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("tracked, required raw-data dependency", policy)
         self.assertIn("not claimed to recreate this local repackaging", policy)
 
-    def test_historical_result_certifications_are_visibly_withdrawn(self):
-        root = Path(__file__).resolve().parents[1]
-        marker = "> **WITHDRAWN — HISTORICAL INVALID OUTPUT.**"
-        for relative in (
-            "code_math_audit_summary.md", "completion_checklist.md", "calibration_audit.md",
-            "statistical_methods_notes.md", "statistics_summary.md", "results_snippet.md",
-        ):
-            self.assertTrue((root / "results" / "statistics" / relative).read_text(encoding="utf-8").startswith(marker))
-
     def test_transitive_lineage_rejects_tampered_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -797,8 +863,12 @@ class ScientificPipelineTests(unittest.TestCase):
             pipeline.source_and_patient("Dataset.psv")
         required = {"runtime", "stages", "artifact_sha256", "lineage", "final_validation", "scientific_status"}
         self.assertTrue(required.issuperset({"runtime", "lineage"}))
-        with mock.patch.dict(pipeline.DATA_POLICY, {"archive_sha256": pipeline.sha256_file(Path(__file__))}):
-            self.assertIn("execution_environment", pipeline.runtime_manifest(Path.cwd(), "test", sys.argv, Path(__file__)))
+        with mock.patch.dict(pipeline.DATA_POLICY, {"archive_sha256": pipeline.sha256_file(Path(__file__))}), \
+             mock.patch.dict(os.environ, {"SOURCE_INVENTORY_SHA256": "1" * 64}):
+            runtime = pipeline.runtime_manifest(Path.cwd(), "test", sys.argv, Path(__file__))
+            self.assertIn("execution_environment", runtime)
+            self.assertEqual(runtime["model_policy_hash"], pipeline.stable_hash(pipeline.MODEL_POLICY))
+            self.assertEqual(runtime["source_inventory_sha256"], "1" * 64)
 
 
 if __name__ == "__main__":

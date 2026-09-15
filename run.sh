@@ -47,7 +47,9 @@ else
     SOURCE_GIT_COMMIT=$(sed -n 's/.*"git_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$SOURCE_SIDECAR")
     SOURCE_GIT_DIRTY=$(sed -n 's/.*"git_dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$SOURCE_SIDECAR")
 fi
-export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY
+SOURCE_INVENTORY_SHA256=$(sed -n 's/.*"source_inventory_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{64\}\)".*/\1/p' "$SOURCE_SIDECAR")
+[[ ${#SOURCE_INVENTORY_SHA256} -eq 64 ]] || { echo "FAIL: invalid source inventory hash" >&2; exit 1; }
+export SOURCE_GIT_COMMIT SOURCE_GIT_DIRTY SOURCE_INVENTORY_SHA256
 command -v sbatch >/dev/null || { echo "FAIL: sbatch is required; invoke on CEDIA" >&2; exit 1; }
 reconcile_ledger() {
     local ledger="$ROOT/logs/run_ledger.tsv" run job commit node state
