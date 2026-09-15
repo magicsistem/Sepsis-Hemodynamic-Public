@@ -9,8 +9,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 25831 passed 40/40 for commit bb3e353; N036 adds a new DCA calibration oracle, so the current suite still requires CEDIA execution.
+- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 26121 passed 41/41 in 13.841 s on compute-0-2 for commit eeaea78 and source inventory 727cd3b3, including N036 fixed-horizon calibration and nested-independence oracles.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: run 20260911T185228Z-bb3e353, job 25832, completed 0:0 on compute-0-2 with a validated 53-file package, but is superseded because N036 invalidates its DCA probability estimand.
