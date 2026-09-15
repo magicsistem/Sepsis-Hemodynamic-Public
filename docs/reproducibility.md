@@ -12,7 +12,7 @@ hashes for every scientific artifact. The lineage is:
 
 ```text
 raw archive -> harmonized PSV rows -> causal features -> patient folds
--> nested models/OOF scores -> nested Platt calibration/thresholds
+-> nested models/OOF scores -> nested outcome-specific sigmoid calibration/thresholds
 -> metrics, event analysis, inference, transport, ablations, DCA -> manifest
 ```
 
@@ -32,7 +32,7 @@ feature.
 The Challenge Utility evaluator is the unchanged official scorer, pinned in
 `vendor/physionet2019`. It evaluates the shifted persistent Challenge labels;
 it is never labelled a fixed-horizon outcome. Fixed early-warning events use
-the reconstructed onset and the pre-specified useful window `[onset-12h,
+the reconstructed onset and the policy-fixed useful window `[onset-12h,
 onset-1h]`. Only a negative-to-positive crossing opens an alarm episode;
 continuous persistence cannot become a later useful warning after the six-hour
 refractory interval.
@@ -42,7 +42,9 @@ trapezoidal PR-AUC as distinct estimands. Row-time calibration includes Brier,
 fixed equal-width 10-bin ECE, calibration-in-the-large with slope fixed at one,
 a joint intercept/slope fit, reliability rows, and patient-cluster bootstrap
 uncertainty. DCA evaluates assessment now for true reconstructed onset in the
-next six hours at observed pre-onset decision hours and uses patient-cluster
-uncertainty. Cluster-respecting paired patient permutation tests predefine the
+next six hours at observed pre-onset decision hours. Its probability is a
+separate sigmoid fit on eligible inner-OOF six-hour outcomes, then applied to
+the held-out outer fold; DCA uncertainty uses a patient-cluster bootstrap.
+Cluster-respecting paired patient permutation tests define the
 AUROC/AP/Brier family and use canonical Benjamini-Hochberg reverse cumulative
 minima; no bootstrap sign proportion is presented as a null test.

@@ -30,9 +30,10 @@ checkpoints after downstream partials have been removed deliberately.
 - Schema is the 40 official predictors plus `SepsisLabel`; `Hct` is required.
 - `SepsisLabel` remains explicitly the Challenge's shifted persistent label.
   Reconstructed onset is `first positive ICULOS + 6 h` and is used only for
-  pre-specified early-warning analyses.
-- Model selection, Platt calibration, and operating threshold selection occur
-  only inside each outer training partition.
+  fixed-policy early-warning analyses.
+- Model selection, persistent-label sigmoid calibration, the Utility operating
+  threshold, and the separate six-hour DCA sigmoid calibration occur only
+  inside each outer training partition.
 - Challenge Utility calls the pinned official PhysioNet scorer. Average
   Precision and trapezoidal PR-AUC are named separately.
 - SourceSet A/B transport is internal public-data transport, not external
