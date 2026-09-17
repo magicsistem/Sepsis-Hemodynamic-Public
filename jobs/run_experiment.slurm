@@ -16,11 +16,12 @@ set -euo pipefail
 : "${REQUESTED_MEMORY_GB:?REQUESTED_MEMORY_GB must be supplied by run.sh}"
 : "${REQUESTED_GPUS:?REQUESTED_GPUS must be supplied by run.sh}"
 CONTAINER=${SEPSIS_CONTAINER:-/home/miguel.benavides__yachaytech.edu.ec/pytorch_24.01-py3.sif}
-[[ "$(hostname)" == compute-0-2 ]] || { echo "FAIL: scientific work is restricted to compute-0-2" >&2; exit 1; }
+NODE_NAME=$(hostname -s)
+[[ "$NODE_NAME" == compute-0-2 ]] || { echo "FAIL: scientific work is restricted to compute-0-2" >&2; exit 1; }
 [[ -f "$CONTAINER" ]] || { echo "FAIL: container not found: $CONTAINER" >&2; exit 1; }
 mkdir -p "$PROJECT_DIR/logs" "$RUN_DIR/resources" "$RUN_DIR/profiles"
 LEDGER="$PROJECT_DIR/logs/run_ledger.tsv"
-ledger_event() { printf '%s\t%s\t%s\t%s\t%s\t%s_%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "${SLURM_JOB_ID:-unknown}" "$SOURCE_GIT_COMMIT" "$(hostname)" "$PIPELINE_STAGE" "$1" >> "$LEDGER"; }
+ledger_event() { printf '%s\t%s\t%s\t%s\t%s\t%s_%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "${SLURM_JOB_ID:-unknown}" "$SOURCE_GIT_COMMIT" "$NODE_NAME" "$PIPELINE_STAGE" "$1" >> "$LEDGER"; }
 ledger_event STARTED
 GPU_SAMPLER_PID=
 cleanup_sampler() { [[ -z "$GPU_SAMPLER_PID" ]] || kill "$GPU_SAMPLER_PID" 2>/dev/null || true; }
@@ -93,7 +94,7 @@ fi
     --stage "${PROFILE_NAME:-$PIPELINE_STAGE}" --time-file "$TIME_FILE" --gpu-log "$GPU_LOG" \
     "${BENCHMARK_ARGS[@]}" --output "$RESOURCE_OUTPUT" --cpus "$REQUESTED_CPUS" \
     --memory-gb "$REQUESTED_MEMORY_GB" --gpus "$REQUESTED_GPUS" \
-    --hostname "$(hostname)" --job-id "$SLURM_JOB_ID" --partition "$SLURM_JOB_PARTITION"
+    --hostname "$NODE_NAME" --job-id "$SLURM_JOB_ID" --partition "$SLURM_JOB_PARTITION"
 [[ "$STAGE_STATUS" -eq 0 ]] || exit "$STAGE_STATUS"
 
 if [[ "$PIPELINE_STAGE" == finalize || "$PIPELINE_STAGE" == promote ]]; then
