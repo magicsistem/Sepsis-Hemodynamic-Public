@@ -715,6 +715,7 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn('pd.read_csv(run_dir / "features.csv", nrows=0)', validator)
         self.assertIn("list(oof.columns) != OOF_OUTPUT_COLUMNS", validator)
         self.assertIn('pd.read_csv(run_dir / "folds.csv")', validator)
+        self.assertIn('.loc[:, identity_columns]', validator)
         self.assertIn("metrics do not reproduce from OOF predictions", validator)
         self.assertIn('oof = pd.read_csv(output_dir / f"{artifact_stem}_oof_predictions.csv")', inspect.getsource(pipeline.outer_oof))
 

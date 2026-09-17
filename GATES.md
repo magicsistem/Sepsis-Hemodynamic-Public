@@ -9,17 +9,17 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26223 passed 40/40 in 14.643 s on compute-0-2 for commit 0e469cb and source inventory 0040edc0, including N041-N053; failed fixture run 26221 remains preserved.
+- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: job 26224 passed its embedded 40/40 suite in 14.122 s for commit 9bc2def, but N054 was discovered afterward and its one-line source correction has only passed local compile/shell/diff checks because the user prohibited another CEDIA run.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: runs 26122/26124 were cancelled after N037/N038 and 26130 was cancelled at explicit user direction before final source corrections; run 25832 remains superseded by N036.
+  EVIDENCE: job 26224 generated the complete artifact family but failed closed at final validation because pandas 1.5 returned `usecols` in file order; the preserved manifest remains PENDING_FINAL_VALIDATION. The user explicitly prohibited a replacement full run.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: N036-N053 are tested; all affected scientific items require one complete rerun plus independent artifact validation before closure.
+  EVIDENCE: N054 is implemented and the recovered artifacts pass all 52 declared hashes plus exact 1,552,210-row OOF identity, but the corrected source was not executed on CEDIA.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
-  EVIDENCE: independent audit of run 25832 verified Utility delegation and downloaded artifact hashes but found N036; repeat the complete audit after the corrected full run.
+  EVIDENCE: the complete job-26224 package was recovered locally; all 52 declared artifact hashes and exact features/folds/baseline/enhanced OOF identity passed. Remaining final-validator checks were not executed after N054, so no PASS is claimed.
 
 
 ## Gates: methodology and results reconstruction

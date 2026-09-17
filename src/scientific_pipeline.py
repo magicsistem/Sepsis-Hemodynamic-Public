@@ -1771,7 +1771,7 @@ def validate_final_manifest(run_dir: Path, allow_pending: bool = False) -> dict[
         "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel",
         "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus",
     ]
-    feature_identity = pd.read_csv(run_dir / "features.csv", usecols=identity_columns)
+    feature_identity = pd.read_csv(run_dir / "features.csv", usecols=identity_columns).loc[:, identity_columns]
     feature_schema = pd.read_csv(run_dir / "features.csv", nrows=0)
     fold_artifact = pd.read_csv(run_dir / "folds.csv")
     require_fold_context(feature_identity, fold_artifact)
