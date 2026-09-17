@@ -400,6 +400,8 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertNotIn("compute-0-1", job)
         self.assertIn("set -euo pipefail", entrypoint)
         self.assertIn("set -euo pipefail", job)
+        self.assertIn("host_python=unavailable", job)
+        self.assertIn('"$RUNTIME" exec', job)
         self.assertEqual(resource_provenance.CPU_CAP, 32)
         self.assertEqual(resource_provenance.MEMORY_CAP_GB, 64)
         self.assertEqual(resource_provenance.GPU_CAP, 1)

@@ -41,10 +41,9 @@ cd "$PROJECT_DIR"
 echo CEDIA_ENVIRONMENT_BEGIN
 hostname
 uname -a
-python --version
-which python
-which sbatch
-which squeue
+if command -v python >/dev/null 2>&1; then python --version; command -v python; else echo host_python=unavailable; fi
+command -v sbatch
+command -v squeue
 git --version
 if [[ "$REQUESTED_GPUS" == 1 ]]; then nvidia-smi; fi
 echo CEDIA_ENVIRONMENT_END
