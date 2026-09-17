@@ -199,6 +199,10 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertEqual(observed.iloc[1], 1.0)
         self.assertTrue(math.isnan(observed.iloc[2]))
         features = pipeline.feature_patient(patient_frame(), include_hemodynamics=False)
+        self.assertIn("raw__HR", features)
+        self.assertNotIn("raw__HR", pipeline.model_features(features, "baseline"))
+        self.assertIn(pipeline.onset.TARGET_COLUMN, features)
+        self.assertNotIn(pipeline.onset.TARGET_COLUMN, pipeline.model_features(features, "baseline"))
         self.assertEqual(features["Age"].nunique(), 1)
         self.assertFalse(any(column.startswith("Age_") for column in features.columns))
         future_changed = patient_frame()
@@ -498,20 +502,21 @@ class ScientificPipelineTests(unittest.TestCase):
         job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
         self.assertLess(entrypoint.index("export PYTHONHASHSEED=20260906"), entrypoint.index("python scripts/source_provenance.py"))
         self.assertIn("SOURCE_INVENTORY_SHA256", entrypoint)
-        self.assertLess(entrypoint.index("python -m unittest"), entrypoint.index("python scripts/run_experiment.py --archive"))
-        self.assertIn("RESUME_RUN_ID", entrypoint)
-        self.assertIn("SCHEDULER_", entrypoint)
+        self.assertLess(entrypoint.index("TEST_JOB=$(submit_stage tests"), entrypoint.index("PREPARE_JOB=$(submit_stage prepare"))
+        self.assertIn("--dependency=", entrypoint)
         self.assertIn("sacct -n -X", entrypoint)
         self.assertIn("export PYTHONWARNINGS=error", entrypoint)
         self.assertIn("PYTHONHASHSEED=20260906", job)
         self.assertIn('SOURCE_INVENTORY_SHA256="$SOURCE_INVENTORY_SHA256"', job)
-        self.assertIn("#SBATCH --cpus-per-task=8", job)
-        self.assertIn("#SBATCH --mem=32G", job)
+        self.assertNotIn("#SBATCH --cpus-per-task", job)
+        self.assertNotIn("#SBATCH --mem", job)
         self.assertNotIn("#SBATCH --mem=128G", job)
         self.assertIn("logs/run_ledger.tsv", job)
         self.assertIn("trap '", job)
         self.assertIn("CANCELLED_signal_TERM", job)
         self.assertIn("trap - EXIT", job)
+        self.assertIn('[[ "$(hostname)" == compute-0-2 ]]', job)
+        self.assertIn("resource_manifest.json", job)
         self.assertNotIn('os.environ["PYTHONHASHSEED"] =', (root / "src" / "scientific_pipeline.py").read_text(encoding="utf-8"))
         production = "\n".join(path.read_text(encoding="utf-8") for directory in (root / "src", root / "scripts") for path in directory.glob("*.py"))
         self.assertNotIn('filterwarnings("ignore")', production)
@@ -754,7 +759,11 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertNotIn("Fold", inner.columns)  # Outer held-out rows cannot calibrate themselves.
         self.assertEqual(pipeline.MODEL_POLICY["outer_folds"], 5)
         self.assertEqual(pipeline.MODEL_POLICY["inner_folds"], 3)
-        self.assertEqual(pipeline.MODEL_POLICY["xgboost_n_jobs"], 8)
+        with mock.patch.dict(os.environ, {"SLURM_CPUS_PER_TASK": "8"}):
+            self.assertEqual(pipeline.allocated_cpu_count(), 8)
+        with mock.patch.dict(os.environ, {"SLURM_CPUS_PER_TASK": "33"}):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.allocated_cpu_count()
         candidate = pipeline.MODEL_CANDIDATES[0]
         selection = pd.DataFrame([{
             "outer_fold": fold, "selected_candidate": candidate["id"],

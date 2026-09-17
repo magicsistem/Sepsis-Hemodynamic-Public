@@ -38,10 +38,11 @@ from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src import onset_koopman as onset
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
 
-PIPELINE_VERSION = "scientific-pipeline-v4"
+PIPELINE_VERSION = "scientific-pipeline-v5-direct-onset-koopman"
 SEED = 20260906
 OFFICIAL_UTILITY_SHA256 = "26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5"
 DATA_POLICY = {
@@ -76,7 +77,7 @@ FEATURE_POLICY = {
     "ece_equal_width_bins": 10,
     "calibration_patient_cluster_bootstrap_repeats": 300,
     "dca_patient_cluster_bootstrap_repeats": 300,
-    "paired_inference_repeats": 200,
+    "paired_inference_repeats": 300,
     "split_stability_seeds": (SEED, SEED + 101, SEED + 202),
     "threshold_grid": tuple(round(x, 2) for x in np.arange(0.05, 1.00, 0.05)),
     "threshold_tie_break": "lowest threshold among exactly equal maximum official Utility values",
@@ -88,13 +89,14 @@ MODEL_CANDIDATES = (
 MODEL_POLICY = {
     "outer_folds": 5,
     "inner_folds": 3,
-    "selection_metric": "sklearn_average_precision_on_inner_held_out_rows",
+    "selection_metric": "sklearn_average_precision_equal_total_weight_per_patient_on_inner_held_out_decision_hours",
     "candidate_tie_break": "lower max_depth after exactly equal mean inner-fold Average Precision",
     "tree_count_aggregation": "median inner best iteration then Python round, minimum one",
     "candidates": MODEL_CANDIDATES,
     "early_stopping_max_estimators": 600,
     "early_stopping_rounds": 30,
-    "xgboost_n_jobs": 8,
+    "xgboost_threads": "SLURM_CPUS_PER_TASK_or_os_cpu_count_capped_at_32",
+    "maximum_cpu_threads": 32,
     "xgboost_objective": "binary:logistic",
     "xgboost_eval_metric": "logloss",
     "persistent_label_calibration": {
@@ -247,6 +249,15 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
             "source": "physionetchallenges/evaluation-2019@467c49b514542be7a4a0bafe40fa2c3b064dda2e",
             "sha256": utility_hash,
         },
+        "primary_target_policy": onset.TARGET_POLICY,
+        "primary_target_policy_hash": stable_hash(onset.TARGET_POLICY),
+        "koopman_policy": onset.KOOPMAN_POLICY,
+        "koopman_policy_hash": stable_hash(onset.KOOPMAN_POLICY),
+        "direct_onset_calibration_policy": onset.CALIBRATION_POLICY,
+        "direct_onset_calibration_policy_hash": stable_hash(onset.CALIBRATION_POLICY),
+        "direct_onset_alarm_policy": onset.ALARM_POLICY,
+        "direct_onset_alarm_policy_hash": stable_hash(onset.ALARM_POLICY),
+        "primary_representations": list(onset.REPRESENTATIONS),
     }
 
 
@@ -255,6 +266,9 @@ def runtime_resume_context(manifest: dict[str, Any]) -> dict[str, Any]:
         "git_commit", "source_inventory_sha256", "run_sh_sha256", "pipeline_version", "data_archive_sha256", "data_policy_hash",
         "schema_version", "feature_policy_hash", "model_policy_hash", "seed", "pythonhashseed", "dependencies",
         "execution_environment", "gpu", "xgboost_backend", "official_utility",
+        "primary_target_policy_hash", "koopman_policy_hash",
+        "direct_onset_calibration_policy_hash", "direct_onset_alarm_policy_hash",
+        "primary_representations",
     )
     return {key: manifest.get(key) for key in keys}
 
@@ -477,6 +491,7 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
     engineered["Measurement_Count"] = patient.loc[:, DYNAMIC_COLUMNS].notna().sum(axis=1).to_numpy(dtype="int16")
     for column in DYNAMIC_COLUMNS:
         raw = pd.to_numeric(patient[column], errors="coerce")
+        engineered[onset.raw_column(column)] = raw.to_numpy()
         engineered[f"{column}_is_missing"] = raw.isna().to_numpy(dtype="int8")
         observed_at = times.where(raw.notna()).ffill()
         engineered[f"{column}_observation_age_hours"] = (times - observed_at).to_numpy()
@@ -497,7 +512,11 @@ def feature_patient(patient: pd.DataFrame, include_hemodynamics: bool) -> pd.Dat
             sampen = causal_sampen(raw, times)
             engineered[f"{column}_sampen_24h_zero_match"] = np.isposinf(sampen).astype("int8")
             engineered[f"{column}_sampen_24h"] = sampen.replace([np.inf, -np.inf], np.nan).to_numpy()
-    return pd.concat([identity, pd.DataFrame(engineered, index=patient.index)], axis=1)
+    features = pd.concat([identity, pd.DataFrame(engineered, index=patient.index)], axis=1)
+    try:
+        return onset.add_primary_target(features)
+    except onset.OnsetKoopmanError as exc:
+        raise PipelineError(str(exc)) from exc
 
 
 def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
@@ -533,8 +552,22 @@ def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     # administrative provenance and is never a model input.
     if frame.columns.duplicated().any():
         raise PipelineError("Feature schema contains duplicate columns")
-    excluded = {"Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus", "Fold"}
-    columns = [column for column in frame.columns if column not in excluded and not column.endswith("_sampen_effective_n_24h")]
+    excluded = {
+        "Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS",
+        "OnsetReconstructionStatus", "Fold", onset.TARGET_COLUMN,
+        onset.ELIGIBLE_COLUMN, onset.HOURS_TO_ONSET_COLUMN,
+    }
+    columns = [
+        column for column in frame.columns
+        if column not in excluded
+        and not column.startswith("raw__")
+        and not column.startswith(("causal_delta__", "causal_slope__", "koopman_innovation__"))
+        and column not in {
+            "koopman_energy", "koopman_energy_mean_8h", "koopman_energy_max_8h",
+            "koopman_innovation_count",
+        }
+        and not column.endswith("_sampen_effective_n_24h")
+    ]
     enhanced_only = [column for column in columns if column.endswith(("_cv_8h", "_iqr_8h", "_sampen_24h", "_sampen_24h_zero_match"))]
     if variant == "baseline":
         columns = [column for column in columns if column not in enhanced_only]
@@ -543,6 +576,29 @@ def model_features(frame: pd.DataFrame, variant: str) -> list[str]:
     if not columns or "Hct_last_obs" not in columns:
         raise PipelineError("Feature policy failed: canonical Hct is not a model feature")
     return columns
+
+
+def primary_model_features(frame: pd.DataFrame, representation: str) -> list[str]:
+    """Return the fixed C0--C3 schema; SourceSet and target fields never enter."""
+    if representation not in onset.REPRESENTATIONS:
+        raise PipelineError(f"Unknown primary representation: {representation}")
+    state = model_features(frame, "baseline")
+    if representation == "C0":
+        cv = [column for column in model_features(frame, "enhanced") if column.endswith("_cv_8h")]
+        return state + [column for column in cv if column not in state]
+    if representation == "C1":
+        return state
+    if representation == "C2":
+        derived = [name for signal in DYNAMIC_COLUMNS for name in (onset.delta_column(signal), onset.slope_column(signal))]
+    else:
+        derived = [onset.innovation_column(signal) for signal in DYNAMIC_COLUMNS] + [
+            "koopman_energy", "koopman_energy_mean_8h", "koopman_energy_max_8h",
+            "koopman_innovation_count",
+        ]
+    missing = sorted(set(derived).difference(frame.columns))
+    if missing:
+        raise PipelineError(f"{representation} transformed schema is missing {missing}")
+    return state + derived
 
 
 def write_folds(features: pd.DataFrame, output: Path, n_splits: int = MODEL_POLICY["outer_folds"], split_seed: int = SEED) -> dict[str, Any]:
@@ -611,6 +667,20 @@ def xgb_backend(gpu: dict[str, Any]) -> dict[str, str]:
     return {"tree_method": "hist", "device": "cuda"} if major >= 2 else {"tree_method": "gpu_hist", "predictor": "gpu_predictor"}
 
 
+def allocated_cpu_count() -> int:
+    raw = os.environ.get("SLURM_CPUS_PER_TASK")
+    maximum = int(MODEL_POLICY["maximum_cpu_threads"])
+    if raw is None:
+        return min(int(os.cpu_count() or 1), maximum)
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise PipelineError("SLURM_CPUS_PER_TASK must be an integer") from exc
+    if requested < 1 or requested > maximum:
+        raise PipelineError(f"Allocated CPU count must be between 1 and {maximum}; got {requested}")
+    return requested
+
+
 def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimators: int, early_stopping: bool = False):
     import xgboost as xgb
 
@@ -624,7 +694,7 @@ def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimato
         "objective": MODEL_POLICY["xgboost_objective"],
         "eval_metric": MODEL_POLICY["xgboost_eval_metric"],  # XGBoost aucpr is not sklearn Average Precision.
         "random_state": int(seed),
-        "n_jobs": MODEL_POLICY["xgboost_n_jobs"],
+        "n_jobs": allocated_cpu_count(),
         **xgb_backend(gpu),
     }
     if early_stopping:
@@ -632,20 +702,32 @@ def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimato
     return xgb.XGBClassifier(**kwargs)
 
 
-def fit_xgb(model: Any, train: pd.DataFrame, columns: list[str], validation: pd.DataFrame | None = None) -> Any:
+def fit_xgb(
+    model: Any,
+    train: pd.DataFrame,
+    columns: list[str],
+    validation: pd.DataFrame | None = None,
+    target_column: str = "SepsisLabel",
+) -> Any:
     kwargs: dict[str, Any] = {"sample_weight": equal_patient_weights(train), "verbose": False}
     if validation is not None:
         kwargs.update({
-            "eval_set": [(matrix(validation, columns), validation["SepsisLabel"])],
+            "eval_set": [(matrix(validation, columns), validation[target_column])],
             "sample_weight_eval_set": [equal_patient_weights(validation)],
         })
-    return model.fit(matrix(train, columns), train["SepsisLabel"], **kwargs)
+    return model.fit(matrix(train, columns), train[target_column], **kwargs)
 
 
 OOF_OUTPUT_COLUMNS = [
     "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel", "TrueSepsisOnset_ICULOS",
     "OnsetReconstructionStatus", "Fold", "prob_raw", "prob_platt",
     "prob_onset_within_6h_nested", "nested_threshold",
+]
+PRIMARY_OOF_COLUMNS = [
+    "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel",
+    "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus",
+    onset.TARGET_COLUMN, onset.ELIGIBLE_COLUMN, onset.HOURS_TO_ONSET_COLUMN,
+    "Fold", "prob_raw", "prob_calibrated", "nested_alarm_threshold",
 ]
 
 
@@ -658,6 +740,190 @@ def inner_patient_splits(patient: pd.DataFrame, n_splits: int = MODEL_POLICY["in
 
 def patient_mask(frame: pd.DataFrame, patients: Iterable[str]) -> np.ndarray:
     return frame["Patient_ID"].isin(set(patients)).to_numpy()
+
+
+def primary_patient_splits(
+    frame: pd.DataFrame,
+    n_splits: int = MODEL_POLICY["inner_folds"],
+    seed_offset: int = 0,
+    split_seed: int = SEED,
+) -> tuple[pd.DataFrame, list[tuple[np.ndarray, np.ndarray]]]:
+    decisions = onset.primary_decisions(frame)
+    patient = decisions.groupby("Patient_ID", sort=True)[onset.TARGET_COLUMN].max().astype(int).reset_index()
+    if patient[onset.TARGET_COLUMN].value_counts().min() < n_splits:
+        raise PipelineError("Insufficient patient class count for direct-onset inner folds")
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=split_seed + seed_offset)
+    return patient, list(splitter.split(patient, patient[onset.TARGET_COLUMN], groups=patient["Patient_ID"]))
+
+
+def fit_primary_representation(train: pd.DataFrame, representation: str, lift: str = "identity") -> dict[str, Any]:
+    if representation not in onset.REPRESENTATIONS:
+        raise PipelineError(f"Unknown primary representation: {representation}")
+    if representation in {"C0", "C1"}:
+        return {"representation": representation, "lift": "not_applicable", "selected_signals": (), "koopman": None}
+    primary_population = train.loc[
+        train["OnsetReconstructionStatus"] != "septic_onset_left_censored"
+    ].copy()
+    if primary_population.empty:
+        raise PipelineError("Primary representation has no non-left-censored training patients")
+    try:
+        selected = onset.select_dynamic_signals(
+            primary_population,
+            DYNAMIC_COLUMNS,
+            onset.KOOPMAN_POLICY["minimum_observed_row_fraction"],
+            onset.KOOPMAN_POLICY["minimum_patients_with_two_observations"],
+            onset.KOOPMAN_POLICY["maximum_signals"],
+        )
+        if not selected:
+            raise onset.OnsetKoopmanError("No official dynamic signal satisfies fold-local support")
+        fitted = None
+        if representation == "C3":
+            fitted = onset.fit_koopman(
+                primary_population, DYNAMIC_COLUMNS, lift, selected_signals=selected
+            )
+    except onset.OnsetKoopmanError as exc:
+        raise PipelineError(str(exc)) from exc
+    return {"representation": representation, "lift": lift if representation == "C3" else "not_applicable", "selected_signals": selected, "koopman": fitted}
+
+
+def transform_primary_representation(frame: pd.DataFrame, fitted: dict[str, Any]) -> pd.DataFrame:
+    representation = fitted["representation"]
+    if representation in {"C0", "C1"}:
+        return frame.copy()
+    try:
+        derived = (
+            onset.transform_deltas(frame, DYNAMIC_COLUMNS, fitted["selected_signals"])
+            if representation == "C2"
+            else onset.transform_koopman(frame, fitted["koopman"])
+        )
+    except onset.OnsetKoopmanError as exc:
+        raise PipelineError(str(exc)) from exc
+    return pd.concat([frame, derived], axis=1)
+
+
+def _primary_fit_and_predict(
+    fit_full: pd.DataFrame,
+    valid_full: pd.DataFrame,
+    representation: str,
+    lift: str,
+    candidate: dict[str, Any],
+    rounds: int,
+    gpu: dict[str, Any],
+    seed: int,
+    early_stopping: bool,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    representation_fit = fit_primary_representation(fit_full, representation, lift)
+    fit_transformed = transform_primary_representation(fit_full, representation_fit)
+    valid_transformed = transform_primary_representation(valid_full, representation_fit)
+    fit = onset.primary_decisions(fit_transformed)
+    valid = onset.primary_decisions(valid_transformed)
+    columns = primary_model_features(fit_transformed, representation)
+    model = xgb_model(candidate, seed, gpu, rounds, early_stopping=early_stopping)
+    fit_xgb(model, fit, columns, valid if early_stopping else None, target_column=onset.TARGET_COLUMN)
+    probability = model.predict_proba(matrix(valid, columns))[:, 1]
+    detail = {
+        "model": model,
+        "representation_fit": representation_fit,
+        "columns": columns,
+        "valid_identity": valid[["Patient_ID", "ICULOS"]].copy(),
+        "selected_signals": list(representation_fit["selected_signals"]),
+    }
+    return probability, detail
+
+
+def select_inner_primary_model(
+    train: pd.DataFrame,
+    representation: str,
+    gpu: dict[str, Any],
+    outer_fold: int,
+    split_seed: int = SEED,
+) -> tuple[dict[str, Any], str, int, pd.DataFrame, list[dict[str, Any]]]:
+    """Select representation/XGBoost and emit inner OOF using inner-train fits only."""
+    try:
+        patient, splits = primary_patient_splits(train, seed_offset=outer_fold + 1, split_seed=split_seed)
+    except onset.OnsetKoopmanError as exc:
+        raise PipelineError(str(exc)) from exc
+    lifts = onset.KOOPMAN_POLICY["lifts"] if representation == "C3" else ("identity",)
+    candidates = [(lift, candidate) for lift in lifts for candidate in MODEL_CANDIDATES]
+    scores: dict[tuple[str, str], list[float]] = {(lift, candidate["id"]): [] for lift, candidate in candidates}
+    rounds: dict[tuple[str, str], list[int]] = {(lift, candidate["id"]): [] for lift, candidate in candidates}
+    selection_detail: list[dict[str, Any]] = []
+    for lift_index, lift in enumerate(lifts):
+        for inner_fold, (fit_idx, valid_idx) in enumerate(splits):
+            fit_patients = patient.iloc[fit_idx]["Patient_ID"]
+            valid_patients = patient.iloc[valid_idx]["Patient_ID"]
+            fit_full = train.loc[patient_mask(train, fit_patients)].copy()
+            valid_full = train.loc[patient_mask(train, valid_patients)].copy()
+            representation_fit = fit_primary_representation(fit_full, representation, lift)
+            fit_transformed = transform_primary_representation(fit_full, representation_fit)
+            valid_transformed = transform_primary_representation(valid_full, representation_fit)
+            fit = onset.primary_decisions(fit_transformed)
+            valid = onset.primary_decisions(valid_transformed)
+            columns = primary_model_features(fit_transformed, representation)
+            koopman_fit = representation_fit["koopman"]
+            transition_counts = (
+                koopman_fit.training_transition_counts if koopman_fit is not None else {}
+            )
+            for candidate_index, candidate in enumerate(MODEL_CANDIDATES):
+                model = xgb_model(
+                    candidate,
+                    split_seed + outer_fold * 1000 + lift_index * 100 + candidate_index * 10 + inner_fold,
+                    gpu,
+                    MODEL_POLICY["early_stopping_max_estimators"],
+                    early_stopping=True,
+                )
+                fit_xgb(model, fit, columns, valid, target_column=onset.TARGET_COLUMN)
+                valid_scored = valid.copy()
+                valid_scored["probability"] = model.predict_proba(matrix(valid, columns))[:, 1]
+                score = onset.patient_balanced_average_precision(valid_scored, "probability")
+                best_round = int(getattr(model, "best_iteration", model.n_estimators - 1)) + 1
+                scores[(lift, candidate["id"])].append(score)
+                rounds[(lift, candidate["id"])].append(best_round)
+                selection_detail.append({
+                    "lift": lift,
+                    "candidate": candidate["id"],
+                    "inner_fold": inner_fold,
+                    "patient_balanced_average_precision": score,
+                    "best_round": best_round,
+                    "selected_signals": json.dumps(list(representation_fit["selected_signals"])),
+                    "koopman_training_transition_counts": json.dumps(transition_counts, sort_keys=True),
+                    "fit_patient_hash": stable_hash(sorted(fit_patients.astype(str))),
+                    "valid_patient_hash": stable_hash(sorted(valid_patients.astype(str))),
+                })
+    winner_lift, winner_id = max(
+        scores,
+        key=lambda key: (
+            float(np.mean(scores[key])),
+            -next(candidate["max_depth"] for candidate in MODEL_CANDIDATES if candidate["id"] == key[1]),
+            key[0] == "identity",
+        ),
+    )
+    winner = next(candidate for candidate in MODEL_CANDIDATES if candidate["id"] == winner_id)
+    selected_rounds = max(1, int(round(float(np.median(rounds[(winner_lift, winner_id)])))))
+    inner_rows: list[pd.DataFrame] = []
+    for inner_fold, (fit_idx, valid_idx) in enumerate(splits):
+        fit_patients = patient.iloc[fit_idx]["Patient_ID"]
+        valid_patients = patient.iloc[valid_idx]["Patient_ID"]
+        fit_full = train.loc[patient_mask(train, fit_patients)].copy()
+        valid_full = train.loc[patient_mask(train, valid_patients)].copy()
+        probability, _ = _primary_fit_and_predict(
+            fit_full, valid_full, representation, winner_lift, winner,
+            selected_rounds, gpu, split_seed + outer_fold * 10000 + inner_fold,
+            early_stopping=False,
+        )
+        valid = onset.primary_decisions(valid_full).copy()
+        valid["prob_raw"] = probability
+        valid["InnerFold"] = inner_fold
+        inner_rows.append(valid[[
+            "Patient_ID", "SourceSet", "ICULOS", "SepsisLabel",
+            "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus",
+            onset.TARGET_COLUMN, onset.ELIGIBLE_COLUMN, "prob_raw", "InnerFold",
+        ]])
+    inner_oof = pd.concat(inner_rows, ignore_index=True).sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
+    expected = onset.primary_decisions(train)
+    if len(inner_oof) != len(expected) or inner_oof.duplicated(["Patient_ID", "ICULOS"]).any():
+        raise PipelineError("Direct-onset inner OOF does not cover eligible outer-train rows exactly once")
+    return winner, winner_lift, selected_rounds, inner_oof, selection_detail
 
 
 def select_inner_model(train: pd.DataFrame, columns: list[str], gpu: dict[str, Any], outer_fold: int, split_seed: int = SEED) -> tuple[dict[str, Any], int, pd.DataFrame]:
@@ -897,10 +1163,17 @@ def calibration_metrics(y: np.ndarray, probability: np.ndarray, sample_weight: n
     }
 
 
-def calibration_metrics_with_patient_uncertainty(frame: pd.DataFrame, probability_column: str, repeats: int | None = None) -> dict[str, Any]:
-    y = binary_array(frame["SepsisLabel"], "Calibration uncertainty")
+def calibration_metrics_with_patient_uncertainty(
+    frame: pd.DataFrame,
+    probability_column: str,
+    repeats: int | None = None,
+    target_column: str = "SepsisLabel",
+    patient_balanced: bool = False,
+) -> dict[str, Any]:
+    y = binary_array(frame[target_column], "Calibration uncertainty")
     probability = probability_array(frame[probability_column], "Calibration uncertainty")
-    point = calibration_metrics(y, probability)
+    base_weight = equal_patient_weights(frame) if patient_balanced else np.ones(len(frame), dtype=float)
+    point = calibration_metrics(y, probability, sample_weight=base_weight)
     repeats = FEATURE_POLICY["calibration_patient_cluster_bootstrap_repeats"] if repeats is None else repeats
     codes, patients = pd.factorize(frame["Patient_ID"], sort=True)
     if repeats < 1 or (codes < 0).any() or len(patients) < 2:
@@ -908,12 +1181,12 @@ def calibration_metrics_with_patient_uncertainty(frame: pd.DataFrame, probabilit
     rng = np.random.default_rng(SEED)
     samples = {name: [] for name in point}
     for _ in range(repeats):
-        weights = rng.multinomial(len(patients), np.full(len(patients), 1 / len(patients)))[codes].astype(float)
+        weights = base_weight * rng.multinomial(len(patients), np.full(len(patients), 1 / len(patients)))[codes].astype(float)
         if set(y[weights > 0]) != {0, 1}:
             raise PipelineError("Patient-cluster calibration bootstrap draw lacks an outcome class")
         for name, value in calibration_metrics(y, probability, sample_weight=weights).items():
             samples[name].append(value)
-    result = {**point, "calibration_estimand_unit": "observed row-time", "point_estimate_weighting": "each observed row-time equally weighted", "uncertainty_method": "patient-cluster bootstrap percentile 95% CI", "uncertainty_unit": "patient; row-time calibration estimand preserved within resampled patients", "uncertainty_repeats": int(repeats), "uncertainty_confidence_level": 0.95}
+    result = {**point, "calibration_estimand_unit": "observed row-time", "point_estimate_weighting": "equal total weight per patient" if patient_balanced else "each observed row-time equally weighted", "uncertainty_method": "patient-cluster bootstrap percentile 95% CI", "uncertainty_unit": "patient; stated point weighting preserved within resampled patients", "uncertainty_repeats": int(repeats), "uncertainty_confidence_level": 0.95}
     for name, values in samples.items():
         result[f"{name}_ci_95_low"] = float(np.quantile(values, 0.025))
         result[f"{name}_ci_95_high"] = float(np.quantile(values, 0.975))
@@ -1345,6 +1618,278 @@ def outer_oof(
     }
 
 
+def primary_outer_oof(
+    features: pd.DataFrame,
+    folds: pd.DataFrame,
+    representation: str,
+    output_dir: Path,
+    gpu: dict[str, Any],
+    split_seed: int = SEED,
+    persist_oof: bool = True,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Fully nested C0--C3 OOF predictions for true onset in 1--6 hours."""
+    merged = require_fold_context(features, folds).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+    records: list[pd.DataFrame] = []
+    selection_rows: list[dict[str, Any]] = []
+    inner_detail_rows: list[dict[str, Any]] = []
+    for outer_fold in sorted(merged["Fold"].unique()):
+        outer_train = merged.loc[merged["Fold"] != outer_fold].copy()
+        outer_test = merged.loc[merged["Fold"] == outer_fold].copy()
+        if set(outer_train["Patient_ID"]) & set(outer_test["Patient_ID"]):
+            raise PipelineError("Direct-onset outer-fold patient overlap")
+        candidate, lift, rounds, inner_oof, detail = select_inner_primary_model(
+            outer_train, representation, gpu, int(outer_fold), split_seed
+        )
+        calibration = onset.fit_calibration_policy(inner_oof, "prob_raw")
+        inner_oof["prob_calibrated"] = onset.apply_calibration(calibration, inner_oof["prob_raw"])
+        threshold, inner_alarm = onset.select_alarm_threshold(inner_oof, "prob_calibrated")
+        representation_fit = fit_primary_representation(outer_train, representation, lift)
+        koopman_fit = representation_fit["koopman"]
+        transformed_train = transform_primary_representation(outer_train, representation_fit)
+        transformed_test = transform_primary_representation(outer_test, representation_fit)
+        train_decisions = onset.primary_decisions(transformed_train)
+        columns = primary_model_features(transformed_train, representation)
+        model = xgb_model(candidate, split_seed + int(outer_fold), gpu, rounds)
+        fit_xgb(model, train_decisions, columns, target_column=onset.TARGET_COLUMN)
+        transformed_test["prob_raw"] = model.predict_proba(matrix(transformed_test, columns))[:, 1]
+        transformed_test["prob_calibrated"] = onset.apply_calibration(calibration, transformed_test["prob_raw"])
+        transformed_test["nested_alarm_threshold"] = threshold
+        records.append(transformed_test[PRIMARY_OOF_COLUMNS])
+        inner_detail_rows.extend({"representation": representation, "outer_fold": int(outer_fold), **row} for row in detail)
+        selection_rows.append({
+            "representation": representation,
+            "outer_fold": int(outer_fold),
+            "selected_candidate": candidate["id"],
+            "selected_hyperparameters": json.dumps(candidate, sort_keys=True),
+            "selected_lift": lift if representation == "C3" else "not_applicable",
+            "selected_tree_count_from_inner_only": rounds,
+            "selected_signals_outer_train": json.dumps(list(representation_fit["selected_signals"])),
+            "selected_signals_hash": stable_hash(list(representation_fit["selected_signals"])),
+            "koopman_training_transition_counts": json.dumps(
+                koopman_fit.training_transition_counts if koopman_fit is not None else {},
+                sort_keys=True,
+            ),
+            "feature_count": len(columns),
+            "feature_column_hash": stable_hash(columns),
+            "calibrator_selected_by_inner_oof_brier": calibration.method,
+            "inner_oof_identity_brier": calibration.identity_brier,
+            "inner_oof_logistic_brier": calibration.logistic_brier,
+            "nested_alarm_threshold_from_inner_oof_only": threshold,
+            "inner_oof_alarm_budget": inner_alarm["false_alarm_episodes_per_patient_day"],
+            "inner_oof_useful_sensitivity": inner_alarm["useful_sensitivity"],
+            "outer_train_patient_hash": stable_hash(sorted(outer_train["Patient_ID"].unique())),
+            "outer_test_patient_hash": stable_hash(sorted(outer_test["Patient_ID"].unique())),
+            "outer_train_patient_count": int(outer_train["Patient_ID"].nunique()),
+            "outer_test_patient_count": int(outer_test["Patient_ID"].nunique()),
+        })
+    oof = pd.concat(records, ignore_index=True).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+    if len(oof) != len(merged) or oof.duplicated(["Patient_ID", "ICULOS"]).any():
+        raise PipelineError("Direct-onset outer OOF does not contain every source row exactly once")
+    selection_path = output_dir / f"{representation}_nested_selection.csv"
+    inner_detail_path = output_dir / f"{representation}_inner_selection.csv"
+    atomic_csv(pd.DataFrame(selection_rows), selection_path)
+    atomic_csv(pd.DataFrame(inner_detail_rows), inner_detail_path)
+    oof_path = output_dir / f"{representation}_oof_predictions.csv"
+    if persist_oof:
+        atomic_csv(oof, oof_path)
+        oof = pd.read_csv(oof_path)
+    return oof, {
+        "representation": representation,
+        "outcome_estimand": "true reconstructed onset in 1--6 hours",
+        "oof_artifact": oof_path.name if persist_oof else None,
+        "oof_sha256": sha256_file(oof_path) if persist_oof else None,
+        "selection_artifact": selection_path.name,
+        "selection_sha256": sha256_file(selection_path),
+        "inner_selection_artifact": inner_detail_path.name,
+        "inner_selection_sha256": sha256_file(inner_detail_path),
+    }
+
+
+def primary_model_summary(oof: pd.DataFrame, representation: str, output_dir: Path) -> dict[str, Any]:
+    decisions = onset.primary_decisions(oof)
+    target = binary_array(decisions[onset.TARGET_COLUMN], f"{representation} direct-onset summary")
+    probability = probability_array(decisions["prob_calibrated"], f"{representation} direct-onset summary")
+    weights = onset.equal_patient_weights(decisions)
+    alarm = onset.alarm_metrics(oof, "prob_calibrated", "nested_alarm_threshold")
+    summary = {
+        "representation": representation,
+        "outcome_estimand": "Y(i,t)=1 iff 1 <= true_onset(i)-t <= 6",
+        "eligibility": onset.TARGET_POLICY,
+        "n_rows_source": int(len(oof)),
+        "n_primary_decision_hours": int(len(decisions)),
+        "n_patients": int(decisions["Patient_ID"].nunique()),
+        "n_positive_decision_hours": int(target.sum()),
+        "patient_balanced_average_precision": float(average_precision_score(target, probability, sample_weight=weights)),
+        "patient_balanced_auroc": float(roc_auc_score(target, probability, sample_weight=weights)),
+        "patient_balanced_brier": float(brier_score_loss(target, probability, sample_weight=weights)),
+        "calibration": calibration_metrics_with_patient_uncertainty(
+            decisions,
+            "prob_calibrated",
+            target_column=onset.TARGET_COLUMN,
+            patient_balanced=True,
+        ),
+        "alarm_policy": {
+            "window": "onset-6h through onset-1h",
+            "refractory_hours": onset.ALARM_POLICY["refractory_hours"],
+            "threshold_provenance": "fold-specific outer-train inner OOF only",
+            "false_alarm_episodes": alarm["false_alarm_episodes"],
+            "false_alarm_episodes_per_patient_day": alarm["false_alarm_episodes_per_patient_day"],
+            "useful_sensitivity": alarm["useful_sensitivity"],
+            "median_lead_time_hours": alarm["median_lead_time_hours"],
+        },
+        "challenge_label_secondary": {
+            "outcome_estimand": "PhysioNet/CinC 2019 shifted persistent label",
+            "utility_at_nested_onset_alarm_policy": challenge_utility(
+                oof.assign(_policy=(oof["prob_calibrated"] >= oof["nested_alarm_threshold"]).astype(float)),
+                "_policy", 0.5,
+            ),
+            "interpretation": "secondary compatibility analysis; it is not the fixed-horizon target",
+        },
+    }
+    atomic_json(output_dir / f"{representation}_metrics.json", summary)
+    atomic_csv(
+        pd.DataFrame(onset.decision_curve(
+            oof,
+            "prob_calibrated",
+            FEATURE_POLICY["dca_threshold_probabilities"],
+            repeats=FEATURE_POLICY["dca_patient_cluster_bootstrap_repeats"],
+            seed=SEED,
+        )),
+        output_dir / f"{representation}_dca.csv",
+    )
+    return summary
+
+
+def validate_primary_nested_provenance(
+    selection: pd.DataFrame,
+    inner: pd.DataFrame,
+    representation: str,
+) -> None:
+    """Reject incomplete or policy-inconsistent nested selection evidence."""
+    candidates = {candidate["id"]: candidate for candidate in MODEL_CANDIDATES}
+    lifts = set(onset.KOOPMAN_POLICY["lifts"] if representation == "C3" else ("identity",))
+    selection_required = {
+        "outer_fold", "selected_candidate", "selected_hyperparameters", "selected_lift",
+        "selected_tree_count_from_inner_only", "selected_signals_outer_train",
+        "selected_signals_hash", "koopman_training_transition_counts", "feature_count",
+        "feature_column_hash", "calibrator_selected_by_inner_oof_brier",
+        "nested_alarm_threshold_from_inner_oof_only", "inner_oof_alarm_budget",
+        "inner_oof_useful_sensitivity", "outer_train_patient_hash",
+        "outer_test_patient_hash", "outer_train_patient_count", "outer_test_patient_count",
+    }
+    inner_required = {
+        "representation", "outer_fold", "lift", "candidate", "inner_fold",
+        "patient_balanced_average_precision", "best_round", "selected_signals",
+        "koopman_training_transition_counts", "fit_patient_hash", "valid_patient_hash",
+    }
+    if not selection_required.issubset(selection) or not inner_required.issubset(inner):
+        raise PipelineError(f"{representation} nested provenance is missing required fields")
+    expected_outer = set(range(MODEL_POLICY["outer_folds"]))
+    expected_lift_values = onset.KOOPMAN_POLICY["lifts"] if representation == "C3" else ("not_applicable",)
+    expected_inner_rows = (
+        MODEL_POLICY["outer_folds"] * MODEL_POLICY["inner_folds"]
+        * len(candidates) * len(lifts)
+    )
+    try:
+        parameters_valid = all(
+            json.loads(row.selected_hyperparameters) == candidates[row.selected_candidate]
+            for row in selection.itertuples()
+        )
+        selection_signals = [json.loads(value) for value in selection["selected_signals_outer_train"]]
+        selection_counts = [json.loads(value) for value in selection["koopman_training_transition_counts"]]
+        inner_signals = [json.loads(value) for value in inner["selected_signals"]]
+        inner_counts = [json.loads(value) for value in inner["koopman_training_transition_counts"]]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PipelineError(f"{representation} nested provenance contains invalid JSON") from exc
+    hashes = pd.concat([
+        selection["selected_signals_hash"], selection["feature_column_hash"],
+        selection["outer_train_patient_hash"], selection["outer_test_patient_hash"],
+        inner["fit_patient_hash"], inner["valid_patient_hash"],
+    ]).astype(str)
+    rounds = pd.to_numeric(selection["selected_tree_count_from_inner_only"], errors="coerce")
+    inner_rounds = pd.to_numeric(inner["best_round"], errors="coerce")
+    counts = selection[["outer_train_patient_count", "outer_test_patient_count"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    thresholds = pd.to_numeric(
+        selection["nested_alarm_threshold_from_inner_oof_only"], errors="coerce"
+    )
+    budgets = pd.to_numeric(selection["inner_oof_alarm_budget"], errors="coerce")
+    sensitivity = pd.to_numeric(selection["inner_oof_useful_sensitivity"], errors="coerce")
+    scores = pd.to_numeric(inner["patient_balanced_average_precision"], errors="coerce")
+    feature_counts = pd.to_numeric(selection["feature_count"], errors="coerce")
+    if (
+        len(selection) != MODEL_POLICY["outer_folds"]
+        or set(selection["outer_fold"]) != expected_outer
+        or len(inner) != expected_inner_rows
+        or set(inner["outer_fold"]) != expected_outer
+        or set(inner["inner_fold"]) != set(range(MODEL_POLICY["inner_folds"]))
+        or set(inner["candidate"]) != set(candidates)
+        or set(inner["lift"]) != lifts
+        or set(inner["representation"]) != {representation}
+        or inner.duplicated(["outer_fold", "lift", "candidate", "inner_fold"]).any()
+        or not set(selection["selected_candidate"]).issubset(candidates)
+        or not set(selection["selected_lift"]).issubset(expected_lift_values)
+        or not parameters_valid
+        or not hashes.str.fullmatch(r"[0-9a-f]{64}").all()
+        or not np.isfinite(rounds).all()
+        or not rounds.between(1, MODEL_POLICY["early_stopping_max_estimators"]).all()
+        or not np.equal(rounds, np.floor(rounds)).all()
+        or not np.isfinite(inner_rounds).all()
+        or not inner_rounds.between(1, MODEL_POLICY["early_stopping_max_estimators"]).all()
+        or not np.equal(inner_rounds, np.floor(inner_rounds)).all()
+        or not np.isfinite(counts).all().all()
+        or (counts <= 0).any().any()
+        or not counts.sum(axis=1).eq(DATA_POLICY["patient_count"]).all()
+        or not np.isfinite(thresholds).all()
+        or not thresholds.isin(onset.ALARM_POLICY["threshold_grid"]).all()
+        or not np.isfinite(budgets).all()
+        or not budgets.between(
+            0, onset.ALARM_POLICY["maximum_false_alarm_episodes_per_patient_day"]
+        ).all()
+        or not np.isfinite(sensitivity).all()
+        or not sensitivity.between(0, 1).all()
+        or not np.isfinite(scores).all()
+        or not scores.between(0, 1).all()
+        or not np.isfinite(feature_counts).all()
+        or not np.equal(feature_counts, np.floor(feature_counts)).all()
+        or (feature_counts <= 0).any()
+        or not all(
+            observed == stable_hash(signals)
+            for observed, signals in zip(selection["selected_signals_hash"], selection_signals)
+        )
+        or (inner["fit_patient_hash"] == inner["valid_patient_hash"]).any()
+        or not set(selection["calibrator_selected_by_inner_oof_brier"]).issubset(
+            set(onset.CALIBRATION_POLICY["candidates"])
+        )
+    ):
+        raise PipelineError(f"{representation} nested provenance is invalid")
+
+    maximum_signals = onset.KOOPMAN_POLICY["maximum_signals"]
+    maximum_transitions = onset.KOOPMAN_POLICY["maximum_training_transitions_per_signal"]
+    for signals, transition_counts in zip(
+        selection_signals + inner_signals,
+        selection_counts + inner_counts,
+    ):
+        if (
+            not isinstance(signals, list)
+            or len(signals) > maximum_signals
+            or len(signals) != len(set(signals))
+            or not set(signals).issubset(DYNAMIC_COLUMNS)
+            or not isinstance(transition_counts, dict)
+            or any(
+                signal not in signals
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or not 0 <= count <= maximum_transitions
+                for signal, count in transition_counts.items()
+            )
+            or (representation == "C3" and set(transition_counts) != set(signals))
+            or (representation != "C3" and transition_counts)
+        ):
+            raise PipelineError(f"{representation} fold-local representation provenance is invalid")
+
+
 def model_summary(oof: pd.DataFrame, variant: str, output_dir: Path, persist_artifacts: bool = True) -> dict[str, Any]:
     y = binary_array(oof["SepsisLabel"], f"{variant} summary")
     raw = probability_array(oof["prob_raw"], f"{variant} raw summary")
@@ -1576,6 +2121,68 @@ def fit_source_transport(features: pd.DataFrame, variant: str, train_source: str
         **discrimination_metrics(y, test["prob_platt"].to_numpy()),
         **calibration_metrics_with_patient_uncertainty(test, "prob_platt"),
         "challenge_utility_at_nested_train_source_threshold": challenge_utility(test, "prob_platt", threshold),
+    }
+
+
+def fit_primary_source_transport(
+    features: pd.DataFrame,
+    representation: str,
+    train_source: str,
+    test_source: str,
+    gpu: dict[str, Any],
+) -> dict[str, Any]:
+    """Fit every parameter in one SourceSet and evaluate once in the other."""
+    train = features.loc[features["SourceSet"] == train_source].copy()
+    test = features.loc[features["SourceSet"] == test_source].copy()
+    if train.empty or test.empty or train_source == test_source:
+        raise PipelineError("Direct-onset transport requires distinct nonempty A/B sources")
+    candidate, lift, rounds, inner_oof, detail = select_inner_primary_model(
+        train, representation, gpu, 100 + (0 if train_source == "A" else 1)
+    )
+    calibration = onset.fit_calibration_policy(inner_oof, "prob_raw")
+    inner_oof["prob_calibrated"] = onset.apply_calibration(calibration, inner_oof["prob_raw"])
+    threshold, _ = onset.select_alarm_threshold(inner_oof, "prob_calibrated")
+    representation_fit = fit_primary_representation(train, representation, lift)
+    koopman_fit = representation_fit["koopman"]
+    transformed_train = transform_primary_representation(train, representation_fit)
+    transformed_test = transform_primary_representation(test, representation_fit)
+    columns = primary_model_features(transformed_train, representation)
+    model = xgb_model(candidate, SEED + 500 + (0 if train_source == "A" else 1), gpu, rounds)
+    fit_xgb(
+        model, onset.primary_decisions(transformed_train), columns,
+        target_column=onset.TARGET_COLUMN,
+    )
+    transformed_test["prob_calibrated"] = onset.apply_calibration(
+        calibration, model.predict_proba(matrix(transformed_test, columns))[:, 1]
+    )
+    transformed_test["transport_threshold"] = threshold
+    performance = onset.primary_performance(transformed_test, "prob_calibrated")
+    alarm = onset.alarm_metrics(transformed_test, "prob_calibrated", "transport_threshold")
+    return {
+        "experiment": f"train_{train_source}_test_{test_source}",
+        "validation_scope": "public SourceSet transport; not independent external validation",
+        "representation": representation,
+        "outcome_estimand": "true reconstructed onset in 1--6 hours",
+        "source_set_is_predictor": False,
+        "destination_labels_used_for_fitting": False,
+        "n_train_patients": int(train["Patient_ID"].nunique()),
+        "n_test_patients": int(test["Patient_ID"].nunique()),
+        "selected_candidate": candidate["id"],
+        "selected_lift": lift if representation == "C3" else "not_applicable",
+        "selected_tree_count_from_train_source_inner_only": rounds,
+        "selected_signals_train_source": json.dumps(list(representation_fit["selected_signals"])),
+        "koopman_training_transition_counts_train_source": json.dumps(
+            koopman_fit.training_transition_counts if koopman_fit is not None else {},
+            sort_keys=True,
+        ),
+        "calibrator_train_source_inner_only": calibration.method,
+        "threshold_train_source_inner_only": threshold,
+        "train_source_inner_fold_hash": stable_hash(detail),
+        "feature_column_hash": stable_hash(columns),
+        **performance,
+        "useful_sensitivity": alarm["useful_sensitivity"],
+        "false_alarm_episodes_per_patient_day": alarm["false_alarm_episodes_per_patient_day"],
+        "median_lead_time_hours": alarm["median_lead_time_hours"],
     }
 
 
@@ -2078,3 +2685,520 @@ def run_scientific_pipeline(root: Path, archive: Path, run_dir: Path, run_id: st
     # not self-hash; every scientific result artifact is covered above.
     atomic_json(run_dir / "result_manifest.json", final)
     return final
+
+
+DIRECT_ONSET_STATUSES = {
+    "INTERNAL_IMPROVEMENT_CONFIRMED",
+    "TRANSPORT_ROBUSTNESS_CONFIRMED",
+    "PROMISING_BUT_NOT_TRANSPORTABLE",
+    "NO_VERIFIED_IMPROVEMENT",
+}
+
+
+def _require_stage(run_dir: Path, stage: str) -> dict[str, Any]:
+    path = run_dir / f"{stage}_stage_manifest.json"
+    if not path.is_file():
+        raise PipelineError(f"Required {stage} stage manifest is missing")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("stage") != stage or manifest.get("status") != "PASS":
+        raise PipelineError(f"Required {stage} stage did not pass")
+    for artifact, expected in manifest.get("artifacts", {}).items():
+        target = run_dir / artifact
+        if not target.is_file() or sha256_file(target) != expected:
+            raise PipelineError(f"{stage} stage artifact is missing or changed: {artifact}")
+    return manifest
+
+
+def _write_stage(run_dir: Path, stage: str, artifacts: Iterable[str], detail: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "stage": stage,
+        "status": "PASS",
+        "completed_at_utc": utc_now(),
+        "artifacts": {artifact: sha256_file(run_dir / artifact) for artifact in artifacts},
+        **detail,
+    }
+    atomic_json(run_dir / f"{stage}_stage_manifest.json", payload)
+    return payload
+
+
+def direct_onset_lineage(
+    run_dir: Path,
+    runtime: dict[str, Any],
+    *,
+    include_resources: bool = False,
+) -> dict[str, Any]:
+    """Build the hash-linked raw-to-report chain from current-run artifacts."""
+    commit = runtime["git_commit"]
+
+    def node(
+        artifact: str,
+        inputs: dict[str, dict[str, Any]],
+        generator: str,
+        definitions: tuple[str, ...],
+    ) -> dict[str, Any]:
+        path = Path(artifact)
+        if not path.is_absolute():
+            path = run_dir / path
+        return {
+            "kind": "artifact_lineage",
+            "artifact": artifact,
+            "sha256": sha256_file(path),
+            "inputs": {name: value["sha256"] for name, value in inputs.items()},
+            "generator": generator,
+            "generator_git_commit": commit,
+            "definition_ids": list(definitions),
+        }
+
+    raw_name = runtime["data_archive_path"]
+    raw = node(raw_name, {}, "external_input", ("physionet_cinc_2019_public_AB_archive",))
+    harmonized = node(
+        "harmonized.csv", {raw_name: raw},
+        "src.scientific_pipeline:harmonize_archive",
+        ("official_40_predictor_schema", "true_onset_reconstruction"),
+    )
+    features = node(
+        "features.csv", {"harmonized.csv": harmonized},
+        "src.scientific_pipeline:build_features",
+        ("causal_features", "direct_onset_1_to_6h_target"),
+    )
+    folds = node(
+        "folds.csv", {"features.csv": features},
+        "src.scientific_pipeline:write_folds",
+        ("patient_grouped_outer_folds",),
+    )
+    selections = {}
+    inner_selections = {}
+    oofs = {}
+    reports = {}
+    dca = {}
+    for representation in onset.REPRESENTATIONS:
+        selection_name = f"{representation}_nested_selection.csv"
+        inner_name = f"{representation}_inner_selection.csv"
+        oof_name = f"{representation}_oof_predictions.csv"
+        metric_name = f"{representation}_metrics.json"
+        dca_name = f"{representation}_dca.csv"
+        model_inputs = {"features.csv": features, "folds.csv": folds}
+        selections[representation] = node(
+            selection_name, model_inputs,
+            "src.scientific_pipeline:primary_outer_oof",
+            ("inner_only_model_calibration_threshold_selection",),
+        )
+        inner_selections[representation] = node(
+            inner_name, model_inputs,
+            "src.scientific_pipeline:select_inner_primary_model",
+            ("fold_local_representation_and_model_selection",),
+        )
+        oofs[representation] = node(
+            oof_name,
+            {
+                "features.csv": features,
+                "folds.csv": folds,
+                selection_name: selections[representation],
+                inner_name: inner_selections[representation],
+            },
+            "src.scientific_pipeline:primary_outer_oof",
+            ("outer_held_out_predictions", "nested_calibration", "nested_alarm_threshold"),
+        )
+        reports[representation] = node(
+            metric_name, {oof_name: oofs[representation]},
+            "src.scientific_pipeline:primary_model_summary",
+            ("patient_balanced_metrics", "official_utility_secondary", "alarm_burden"),
+        )
+        dca[representation] = node(
+            dca_name, {oof_name: oofs[representation]},
+            "src.onset_koopman:decision_curve",
+            ("fixed_horizon_dca", "patient_cluster_uncertainty"),
+        )
+    transport = node(
+        "transport.csv", {"features.csv": features},
+        "src.scientific_pipeline:fit_primary_source_transport",
+        ("train_A_test_B", "train_B_test_A", "no_destination_label_fitting"),
+    )
+    inference = node(
+        "inference.csv",
+        {name["artifact"]: name for name in (oofs["C0"], oofs["C3"])},
+        "src.onset_koopman:paired_patient_bootstrap",
+        ("paired_patient_cluster_bootstrap_C3_minus_C0",),
+    )
+    metrics = node(
+        "metrics.json", {name["artifact"]: name for name in reports.values()},
+        "src.scientific_pipeline:finalize_direct_onset_stage",
+        ("current_run_C0_to_C3_metrics",),
+    )
+    gate = node(
+        "scientific_gate_status.json",
+        {
+            "metrics.json": metrics,
+            "inference.csv": inference,
+            "transport.csv": transport,
+            dca["C0"]["artifact"]: dca["C0"],
+            dca["C3"]["artifact"]: dca["C3"],
+        },
+        "src.scientific_pipeline:_primary_gate_status",
+        ("predefined_internal_and_transport_gates",),
+    )
+    probast = node(
+        "probast_ai_status.json", {"scientific_gate_status.json": gate},
+        "src.scientific_pipeline:finalize_direct_onset_stage",
+        ("not_low_risk_until_independent_review",),
+    )
+    lineage = {
+        "raw_data": raw,
+        "harmonized": harmonized,
+        "features_and_target": features,
+        "folds": folds,
+        "inner_selection": inner_selections,
+        "models_oof_calibration_thresholds": oofs,
+        "model_selection": selections,
+        "metrics": reports,
+        "dca": dca,
+        "transport": transport,
+        "paired_inference": inference,
+        "combined_metrics": metrics,
+        "scientific_gate": gate,
+        "probast_ai": probast,
+    }
+    if include_resources:
+        lineage["resource_provenance"] = node(
+            "resource_manifest.json", {},
+            "scripts.resource_provenance:aggregate",
+            ("measured_resource_profile_and_stage_usage",),
+        )
+    return lineage
+
+
+def prepare_direct_onset_stage(root: Path, archive: Path, run_dir: Path, run_id: str) -> dict[str, Any]:
+    """Validate raw data and publish only harmonized/features/folds checkpoints."""
+    require_python_hash_seed()
+    if run_dir.exists():
+        raise PipelineError(f"Prepare refuses an existing run directory: {run_dir}")
+    run_dir.mkdir(parents=True)
+    runtime = runtime_manifest(root, run_id, sys.argv, archive)
+    if runtime["git_dirty"]:
+        raise PipelineError("Scientific runs require a clean committed checkout")
+    atomic_json(run_dir / "runtime_manifest.json", runtime)
+    harmonized = harmonize_archive(archive, run_dir / "harmonized.csv")
+    atomic_json(run_dir / "harmonized_manifest.json", harmonized)
+    features = build_features(run_dir / "harmonized.csv", run_dir / "features.csv")
+    atomic_json(run_dir / "features_manifest.json", features)
+    feature_frame = pd.read_csv(run_dir / "features.csv")
+    patient_hash = stable_hash(
+        feature_frame.groupby("Patient_ID", sort=True)["SepsisLabel"].max().astype(int).reset_index().to_dict("records")
+    )
+    folds = write_folds(feature_frame, run_dir / "folds.csv")
+    if folds["patient_inventory_hash"] != patient_hash:
+        raise PipelineError("Fold patient inventory does not match prepared features")
+    atomic_json(run_dir / "folds_manifest.json", folds)
+    cohort = cohort_flow_summary(feature_frame, harmonized)
+    cohort.update({
+        "primary_decision_hours": int((feature_frame[onset.ELIGIBLE_COLUMN] == 1).sum()),
+        "left_censored_patients_excluded_from_primary": int(
+            feature_frame.loc[
+                feature_frame["OnsetReconstructionStatus"] == "septic_onset_left_censored", "Patient_ID"
+            ].nunique()
+        ),
+        "primary_target_policy": onset.TARGET_POLICY,
+    })
+    atomic_json(run_dir / "cohort_flow.json", cohort)
+    return _write_stage(
+        run_dir,
+        "prepare",
+        (
+            "runtime_manifest.json", "harmonized.csv", "harmonized_manifest.json",
+            "features.csv", "features_manifest.json", "folds.csv",
+            "folds_manifest.json", "cohort_flow.json",
+        ),
+        {"run_id": run_id, "pipeline_version": PIPELINE_VERSION},
+    )
+
+
+def model_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str, Any]:
+    """Fit C0--C3 and A/B transport after a hash-verified prepare stage."""
+    require_python_hash_seed()
+    _require_stage(run_dir, "prepare")
+    if (run_dir / "model_stage_manifest.json").exists():
+        raise PipelineError("Model stage refuses to overwrite an existing model-stage manifest")
+    runtime = json.loads((run_dir / "runtime_manifest.json").read_text(encoding="utf-8"))
+    if runtime.get("run_id") != run_id or runtime.get("pipeline_version") != PIPELINE_VERSION:
+        raise PipelineError("Model stage runtime context mismatch")
+    gpu = gpu_runtime()
+    if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
+        raise PipelineError(f"Model stage requires a validated GPU: {gpu['reason']}")
+    model_runtime = {
+        "timestamp_utc": utc_now(),
+        "hostname": platform.node(),
+        "gpu": gpu,
+        "xgboost_backend": xgb_backend(gpu),
+        "slurm_cpus_per_task": os.environ.get("SLURM_CPUS_PER_TASK", "unset"),
+        "slurm_mem_per_node": os.environ.get("SLURM_MEM_PER_NODE", "unset"),
+    }
+    atomic_json(run_dir / "model_runtime_manifest.json", model_runtime)
+    features = pd.read_csv(run_dir / "features.csv").sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+    folds = pd.read_csv(run_dir / "folds.csv")
+    artifacts = ["model_runtime_manifest.json"]
+    for representation in onset.REPRESENTATIONS:
+        _, detail = primary_outer_oof(features, folds, representation, run_dir, gpu)
+        artifacts.extend([
+            detail["oof_artifact"], detail["selection_artifact"], detail["inner_selection_artifact"],
+        ])
+    transport = [
+        fit_primary_source_transport(features, representation, train_source, test_source, gpu)
+        for representation in onset.REPRESENTATIONS
+        for train_source, test_source in (("A", "B"), ("B", "A"))
+    ]
+    atomic_csv(pd.DataFrame(transport), run_dir / "transport.csv")
+    artifacts.append("transport.csv")
+    return _write_stage(
+        run_dir,
+        "model",
+        artifacts,
+        {"run_id": run_id, "representations": list(onset.REPRESENTATIONS)},
+    )
+
+
+def _primary_gate_status(
+    summaries: dict[str, dict[str, Any]],
+    inference: list[dict[str, Any]],
+    transport: pd.DataFrame,
+    c0_dca: pd.DataFrame,
+    c3_dca: pd.DataFrame,
+) -> dict[str, Any]:
+    inference_by_metric = {row["metric"]: row for row in inference}
+    ap = inference_by_metric["patient_balanced_average_precision"]
+    brier = inference_by_metric["patient_balanced_brier"]
+    c0_alarm = summaries["C0"]["alarm_policy"]
+    c3_alarm = summaries["C3"]["alarm_policy"]
+    dca = c0_dca[["threshold_probability", "model_net_benefit"]].merge(
+        c3_dca[[
+            "threshold_probability", "model_net_benefit", "model_net_benefit_ci_95_low",
+            "treat_all_net_benefit", "treat_none_net_benefit",
+        ]],
+        on="threshold_probability",
+        suffixes=("_C0", "_C3"),
+        validate="one_to_one",
+    )
+    dca_favorable = bool((
+        (dca["model_net_benefit_C3"] >= dca["model_net_benefit_C0"])
+        & (dca["model_net_benefit_C3"] >= dca["treat_all_net_benefit"])
+        & (dca["model_net_benefit_C3"] >= dca["treat_none_net_benefit"])
+        & (dca["model_net_benefit_ci_95_low"] >= 0)
+    ).any())
+    gates = {
+        "ap_ci_lower_above_zero": ap["paired_patient_bootstrap_ci_95_low"] > 0,
+        "useful_sensitivity_superior_to_C0": c3_alarm["useful_sensitivity"] > c0_alarm["useful_sensitivity"],
+        "false_alarm_budget_at_most_0_25": c3_alarm["false_alarm_episodes_per_patient_day"] <= onset.ALARM_POLICY["maximum_false_alarm_episodes_per_patient_day"],
+        "brier_no_statistically_supported_deterioration": brier["paired_patient_bootstrap_ci_95_low"] <= 0,
+        "median_lead_time_noninferior": c3_alarm["median_lead_time_hours"] >= c0_alarm["median_lead_time_hours"],
+        "dca_favorable_to_C0_treat_all_treat_none": dca_favorable,
+    }
+    internal = all(gates.values())
+    transport_pivot = transport.pivot(index="experiment", columns="representation", values="patient_balanced_average_precision")
+    transport_directions = {
+        direction: bool(transport_pivot.loc[direction, "C3"] > transport_pivot.loc[direction, "C0"])
+        for direction in ("train_A_test_B", "train_B_test_A")
+    }
+    transport_confirmed = internal and all(transport_directions.values())
+    if transport_confirmed:
+        status = "TRANSPORT_ROBUSTNESS_CONFIRMED"
+    elif internal:
+        status = "PROMISING_BUT_NOT_TRANSPORTABLE"
+    else:
+        status = "NO_VERIFIED_IMPROVEMENT"
+    return {
+        "scientific_status": status,
+        "internal_gates": gates,
+        "transport_C3_superior_to_C0": transport_directions,
+        "external_validation": "BLOCKED_EXTERNAL_DATA",
+        "interpretation": "Status is determined by current-run artifacts; successful execution alone cannot produce a scientific PASS.",
+    }
+
+
+def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str, Any]:
+    """Create data-driven reports and a pending manifest; promotion is separate."""
+    require_python_hash_seed()
+    _require_stage(run_dir, "prepare")
+    _require_stage(run_dir, "model")
+    if (run_dir / "finalize_stage_manifest.json").exists():
+        raise PipelineError("Finalize stage refuses to overwrite existing evidence")
+    summaries = {}
+    oofs = {}
+    artifacts = []
+    for representation in onset.REPRESENTATIONS:
+        oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
+        oofs[representation] = oof
+        summaries[representation] = primary_model_summary(oof, representation, run_dir)
+        artifacts.extend([f"{representation}_metrics.json", f"{representation}_dca.csv"])
+    atomic_json(run_dir / "metrics.json", summaries)
+    artifacts.append("metrics.json")
+    inference = onset.paired_patient_bootstrap(
+        oofs["C0"], oofs["C3"], repeats=FEATURE_POLICY["paired_inference_repeats"], seed=SEED
+    )
+    atomic_csv(pd.DataFrame(inference), run_dir / "inference.csv")
+    artifacts.append("inference.csv")
+    transport = pd.read_csv(run_dir / "transport.csv")
+    gate_status = _primary_gate_status(
+        summaries,
+        inference,
+        transport,
+        pd.read_csv(run_dir / "C0_dca.csv"),
+        pd.read_csv(run_dir / "C3_dca.csv"),
+    )
+    atomic_json(run_dir / "scientific_gate_status.json", gate_status)
+    artifacts.append("scientific_gate_status.json")
+    probast = {
+        "instrument": "PROBAST+AI",
+        "status": "NOT_LOW_RISK_UNTIL_INDEPENDENT_REVIEW",
+        "external_validation": "BLOCKED_EXTERNAL_DATA",
+    }
+    atomic_json(run_dir / "probast_ai_status.json", probast)
+    artifacts.append("probast_ai_status.json")
+    stage = _write_stage(
+        run_dir,
+        "finalize",
+        artifacts,
+        {"run_id": run_id, "scientific_status": gate_status["scientific_status"]},
+    )
+    initial = {
+        "runtime": json.loads((run_dir / "runtime_manifest.json").read_text(encoding="utf-8")),
+        "stage_manifests": {
+            name: json.loads((run_dir / f"{name}_stage_manifest.json").read_text(encoding="utf-8"))
+            for name in ("prepare", "model", "finalize")
+        },
+        "lineage": direct_onset_lineage(
+            run_dir,
+            json.loads((run_dir / "runtime_manifest.json").read_text(encoding="utf-8")),
+        ),
+        "artifact_sha256": artifact_hashes(run_dir),
+        "scientific_status": gate_status["scientific_status"],
+        "computational_status": "PENDING_RESOURCE_AND_FINAL_VALIDATION",
+        "final_validation": {"status": "PENDING"},
+    }
+    atomic_json(run_dir / "result_manifest.json", initial)
+    return stage
+
+
+def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -> dict[str, Any]:
+    manifest_path = run_dir / "result_manifest.json"
+    if not manifest_path.is_file():
+        raise PipelineError("Direct-onset result manifest is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = "PENDING_RESOURCE_AND_FINAL_VALIDATION" if allow_pending else "COMPUTATIONAL_RUN_VALIDATED"
+    if manifest.get("computational_status") != expected:
+        raise PipelineError("Direct-onset computational status is invalid")
+    if manifest.get("scientific_status") not in DIRECT_ONSET_STATUSES:
+        raise PipelineError("Direct-onset scientific status is invalid")
+    if "lineage" not in manifest:
+        raise PipelineError("Direct-onset artifact lineage is missing")
+    validate_lineage_nodes(run_dir, manifest["lineage"])
+    for stage in ("prepare", "model", "finalize"):
+        current = _require_stage(run_dir, stage)
+        if stable_hash(current) != stable_hash(manifest.get("stage_manifests", {}).get(stage)):
+            raise PipelineError(f"Manifest does not contain the current {stage} stage")
+    validate_artifact_hashes(run_dir, manifest["artifact_sha256"])
+    runtime = manifest["runtime"]
+    if (
+        runtime.get("pipeline_version") != PIPELINE_VERSION
+        or runtime.get("git_dirty") is not False
+        or runtime.get("primary_target_policy_hash") != stable_hash(onset.TARGET_POLICY)
+        or runtime.get("koopman_policy_hash") != stable_hash(onset.KOOPMAN_POLICY)
+        or runtime.get("direct_onset_calibration_policy_hash") != stable_hash(onset.CALIBRATION_POLICY)
+        or runtime.get("direct_onset_alarm_policy_hash") != stable_hash(onset.ALARM_POLICY)
+        or runtime.get("primary_representations") != list(onset.REPRESENTATIONS)
+    ):
+        raise PipelineError("Direct-onset runtime policy provenance is invalid")
+    feature_identity = pd.read_csv(
+        run_dir / "features.csv",
+        usecols=[
+            "Patient_ID", "SourceSet", "ICULOS", "Age", "SepsisLabel",
+            "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus",
+            onset.TARGET_COLUMN, onset.ELIGIBLE_COLUMN, onset.HOURS_TO_ONSET_COLUMN,
+        ],
+    ).loc[:, PRIMARY_OOF_COLUMNS[:10]]
+    folds = pd.read_csv(run_dir / "folds.csv")
+    expected_identity = feature_identity.merge(
+        folds[["Patient_ID", "Fold"]], on="Patient_ID", validate="many_to_one"
+    ).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    identities = []
+    for representation in onset.REPRESENTATIONS:
+        oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
+        if list(oof.columns) != PRIMARY_OOF_COLUMNS:
+            raise PipelineError(f"{representation} OOF schema is invalid")
+        identity = oof[PRIMARY_OOF_COLUMNS[:11]].sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+        if not identity.equals(expected_identity):
+            raise PipelineError(f"{representation} OOF identity does not match features/folds")
+        identities.append(identity)
+        recomputed = onset.primary_performance(oof, "prob_calibrated")
+        if any(metrics[representation].get(name) != value for name, value in recomputed.items()):
+            raise PipelineError(f"{representation} primary metrics do not reproduce from OOF")
+        selection = pd.read_csv(run_dir / f"{representation}_nested_selection.csv")
+        inner_selection = pd.read_csv(run_dir / f"{representation}_inner_selection.csv")
+        validate_primary_nested_provenance(selection, inner_selection, representation)
+    if not all(identities[0].equals(identity) for identity in identities[1:]):
+        raise PipelineError("C0--C3 OOF identities are not paired")
+    transport = pd.read_csv(run_dir / "transport.csv")
+    expected_transport = {
+        (representation, f"train_{source}_test_{target}")
+        for representation in onset.REPRESENTATIONS
+        for source, target in (("A", "B"), ("B", "A"))
+    }
+    if (
+        set(zip(transport["representation"], transport["experiment"])) != expected_transport
+        or not transport["source_set_is_predictor"].eq(False).all()
+        or not transport["destination_labels_used_for_fitting"].eq(False).all()
+    ):
+        raise PipelineError("Direct-onset transport provenance is invalid")
+    try:
+        transport_counts = [json.loads(value) for value in transport.loc[
+            transport["representation"] == "C3",
+            "koopman_training_transition_counts_train_source",
+        ]]
+        transport_signals = [json.loads(value) for value in transport.loc[
+            transport["representation"] == "C3", "selected_signals_train_source",
+        ]]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PipelineError("Transport transition-count provenance is invalid") from exc
+    if len(transport_counts) != 2 or any(
+        not isinstance(counts, dict)
+        or not isinstance(signals, list)
+        or set(counts) != set(signals)
+        or not set(signals).issubset(DYNAMIC_COLUMNS)
+        or any(
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 0 <= count <= onset.KOOPMAN_POLICY["maximum_training_transitions_per_signal"]
+            for count in counts.values()
+        )
+        for signals, counts in zip(transport_signals, transport_counts)
+    ):
+        raise PipelineError("Transport transition-count provenance is invalid")
+    if not allow_pending:
+        resources = run_dir / "resource_manifest.json"
+        if not resources.is_file():
+            raise PipelineError("Final resource manifest is missing")
+        resource_manifest = json.loads(resources.read_text(encoding="utf-8"))
+        if resource_manifest.get("status") != "PASS" or set(resource_manifest.get("stages", {})) != {"prepare", "model", "finalize"}:
+            raise PipelineError("Final resource manifest is invalid")
+    return {"status": "PASS", "validated_at_utc": utc_now()}
+
+
+def promote_direct_onset_manifest(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "result_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("computational_status") != "PENDING_RESOURCE_AND_FINAL_VALIDATION":
+        raise PipelineError("Only a pending direct-onset manifest can be promoted")
+    # Resource provenance is intentionally added after finalize-stage timing is known.
+    manifest["artifact_sha256"] = artifact_hashes(run_dir)
+    atomic_json(manifest_path, manifest)
+    validate_direct_onset_manifest(run_dir, allow_pending=True)
+    resources = run_dir / "resource_manifest.json"
+    if not resources.is_file():
+        raise PipelineError("Cannot promote without final resource provenance")
+    manifest["lineage"] = direct_onset_lineage(
+        run_dir, manifest["runtime"], include_resources=True
+    )
+    manifest["artifact_sha256"] = artifact_hashes(run_dir)
+    manifest["computational_status"] = "COMPUTATIONAL_RUN_VALIDATED"
+    manifest["final_validation"] = {"status": "PASS", "validated_at_utc": utc_now()}
+    atomic_json(manifest_path, manifest)
+    return validate_direct_onset_manifest(run_dir)
