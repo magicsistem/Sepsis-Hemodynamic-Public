@@ -118,7 +118,7 @@ def add_primary_target(frame: pd.DataFrame) -> pd.DataFrame:
         target = ((hours >= TARGET_POLICY["positive_window_hours"][0]) &
                   (hours <= TARGET_POLICY["positive_window_hours"][1])).astype("int8")
         output.loc[index, HOURS_TO_ONSET_COLUMN] = hours
-        output.loc[index[eligible], TARGET_COLUMN] = target[eligible]
+        output.loc[index[eligible], TARGET_COLUMN] = target[eligible].astype(float)
         output.loc[index, ELIGIBLE_COLUMN] = eligible.astype("int8")
     eligible = output[ELIGIBLE_COLUMN].to_numpy(dtype=int) == 1
     target = output[TARGET_COLUMN].to_numpy(dtype=float)

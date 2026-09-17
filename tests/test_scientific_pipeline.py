@@ -602,6 +602,18 @@ class ScientificPipelineTests(unittest.TestCase):
             model.fit(np.array([[0.0], [1.0], [0.0], [1.0]]), np.array([0, 1, 0, 1]), verbose=False)
             self.assertEqual(len(model.predict_proba(np.array([[0.0], [1.0]]))), 2)
 
+    def test_optional_dependency_runtime_failure_is_recorded_in_cpu_mode(self):
+        real_import = __import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "cudf":
+                raise RuntimeError("no CUDA driver")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=guarded_import):
+            versions = pipeline.dependency_versions()
+        self.assertEqual(versions["cudf"], "unavailable:RuntimeError")
+
     def test_cupy_without_devices_stays_in_cpu_mode(self):
         class Runtime:
             @staticmethod

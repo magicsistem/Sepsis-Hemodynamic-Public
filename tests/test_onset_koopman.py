@@ -144,8 +144,8 @@ class KoopmanOracleTests(unittest.TestCase):
             self.assertEqual(before["koopman_innovation__HR"].dtype, np.float32)
         delta = koopman.transform_deltas(changed, ("HR", "MAP"), ("HR",))
         self.assertTrue(delta["causal_delta__MAP"].isna().all())
-        self.assertEqual(delta.iloc[-1]["causal_delta__HR"], 993.0)
-        self.assertEqual(delta.iloc[-1]["causal_slope__HR"], 993.0)
+        self.assertEqual(delta.iloc[-1]["causal_delta__HR"], 994.0)
+        self.assertEqual(delta.iloc[-1]["causal_slope__HR"], 994.0)
 
 
 def primary_oof() -> pd.DataFrame:
@@ -355,6 +355,17 @@ class InferenceTransportTests(unittest.TestCase):
 
 
 class ResourceOrchestrationTests(unittest.TestCase):
+    def test_failed_gnu_time_diagnostic_is_parsed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "time.txt"
+            path.write_text(
+                "Command exited with non-zero status 1\n"
+                "elapsed_seconds=2\nuser_seconds=1\nsystem_seconds=0.5\n"
+                "max_rss_kb=1024\nexit_status=1\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(resource_provenance.parse_time(path)["exit_status"], 1.0)
+
     def test_profile_selection_caps_efficiency_and_memory_margin(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

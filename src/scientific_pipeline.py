@@ -175,8 +175,8 @@ def dependency_versions() -> dict[str, str]:
         try:
             module = __import__(optional)
             versions[optional] = getattr(module, "__version__", "installed")
-        except ImportError:
-            versions[optional] = "not-installed"
+        except Exception as exc:
+            versions[optional] = f"unavailable:{type(exc).__name__}"
     return versions
 
 

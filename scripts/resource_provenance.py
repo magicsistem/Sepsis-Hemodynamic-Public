@@ -85,6 +85,8 @@ def verify_profile(args: argparse.Namespace) -> dict:
 def parse_time(path: Path) -> dict[str, float]:
     values = {}
     for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line:
+            continue  # GNU time prefixes failed commands with a diagnostic sentence.
         key, value = line.split("=", 1)
         values[key] = float(value)
     required = {"elapsed_seconds", "user_seconds", "system_seconds", "max_rss_kb", "exit_status"}
