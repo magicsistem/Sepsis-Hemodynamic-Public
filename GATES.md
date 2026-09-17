@@ -41,3 +41,39 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 
 - [x] G11: every active tracked source file and every cross-file scientific interface has a recorded line-by-line review with zero unrecorded scientific defects
   EVIDENCE: docs/LINE_BY_LINE_SCIENTIFIC_AUDIT.md records the complete active-source ranges and cross-file traces through N053; the final pre-compute reread corrected N041-N052 and the accumulated suite exposed/corrected N053 before any replacement full run. Binary raw data and withdrawn historical outputs are checked by identity/isolation rather than treated as active scientific inputs.
+
+
+## Gates: direct-onset Koopman experiment
+
+- [ ] G12: the primary target is exactly true onset in 1--6 hours, excludes onset/post-onset and left-censored patients, and excludes the final six control hours needed for complete follow-up
+  CHECK: python -m unittest tests.test_onset_koopman.OnsetTargetTests -v && printf 'G12_TARGET_ORACLES_PASS\n'
+  EXPECT: G12_TARGET_ORACLES_PASS
+
+- [ ] G13: fold-local state, delta/slope, and Koopman transforms pass zero-residual, anomaly, sparse-support, fixed-schema, float32, and no-future oracles
+  CHECK: python -m unittest tests.test_onset_koopman.KoopmanOracleTests -v && printf 'G13_KOOPMAN_ORACLES_PASS\n'
+  EXPECT: G13_KOOPMAN_ORACLES_PASS
+
+- [ ] G14: C0--C3 model selection, representation fitting, calibration choice, and alarm threshold selection use inner-training/inner-OOF data only
+  CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests -v && printf 'G14_NESTED_POLICY_PASS\n'
+  EXPECT: G14_NESTED_POLICY_PASS
+
+- [ ] G15: primary patient-balanced AP inference, six-hour alarm budget, lead time, DCA, and A-to-B/B-to-A transport are recomputable from current-run artifacts without destination labels
+  CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests -v && printf 'G15_INFERENCE_TRANSPORT_PASS\n'
+  EXPECT: G15_INFERENCE_TRANSPORT_PASS
+
+- [ ] G16: run.sh remains the sole entrypoint, submits only compute-0-2 jobs, bounds CPU/RAM/GPU, records resource measurements, and links prepare/model/finalize fail-closed
+  CHECK: python -m unittest tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G16_RESOURCE_ORCHESTRATION_PASS\n'
+  EXPECT: G16_RESOURCE_ORCHESTRATION_PASS
+
+- [ ] G17: the methodological plan records current evidence, reproducible searches, mathematics, rejected alternatives, IEEE references from 2021--2026, official-standard exceptions, and explicit Zahibi/Zabihi exclusion without modifying the paper
+  CHECK: python -m unittest tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G17_METHODOLOGY_DOCUMENT_PASS\n'
+  EXPECT: G17_METHODOLOGY_DOCUMENT_PASS
+
+- [ ] G18: the complete accumulated local/container test suite and static gates pass from a clean committed checkout
+  EVIDENCE: pending implementation and CEDIA container execution.
+
+- [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
+  EVIDENCE: pending profiling through bash run.sh --profile.
+
+- [ ] G20: one clean bash run.sh execution completes prepare, model, and finalize; all hashes, OOF identities, nested provenance, resource manifests, and final scientific gates pass an independent audit
+  EVIDENCE: pending final CEDIA run and independent audit; no PASS may be inferred from process exit alone.
