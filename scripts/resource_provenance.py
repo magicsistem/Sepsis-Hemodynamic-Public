@@ -69,9 +69,11 @@ def verify_profile(args: argparse.Namespace) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
     expected = {"cpus": args.cpus, "memory_gb": args.memory_gb, "gpus": args.gpus}
+    expected_partition = "gpu" if args.gpus else "cpu"
     if (
         payload.get("status") != "PASS"
         or payload.get("hostname") != "compute-0-2"
+        or payload.get("partition") != expected_partition
         or payload.get("requested") != expected
         or payload.get("benchmark") != benchmark
         or benchmark.get("status") != "PASS"
@@ -122,6 +124,7 @@ def record_stage(args: argparse.Namespace) -> dict:
         "stage": args.stage,
         "status": "PASS" if int(timing["exit_status"]) == 0 else "FAIL",
         "hostname": args.hostname,
+        "partition": args.partition,
         "slurm_job_id": args.job_id,
         "requested": {"cpus": cpus, "memory_gb": memory_gb, "gpus": gpus},
         "measured": {
@@ -154,7 +157,7 @@ def select_profile(args: argparse.Namespace) -> dict:
     profiles = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     if len(profiles) != 6 or any(profile.get("status") != "PASS" for profile in profiles):
         raise ResourceError("All six CPU/GPU benchmark profiles must pass")
-    expected = {(0, cpu) for cpu in (8, 16, 32)} | {(1, cpu) for cpu in (2, 4, 8)}
+    expected = {(gpus, cpu) for gpus in (0, 1) for cpu in (8, 16, 32)}
     if {(profile["requested"]["gpus"], profile["requested"]["cpus"]) for profile in profiles} != expected:
         raise ResourceError("Benchmark profile grid is incomplete")
 
@@ -207,7 +210,12 @@ def aggregate(args: argparse.Namespace) -> dict:
         if not path.is_file():
             raise ResourceError(f"Missing resource evidence for {stage}")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("status") != "PASS" or payload.get("hostname") != "compute-0-2":
+        expected_partition = "gpu" if payload.get("requested", {}).get("gpus") else "cpu"
+        if (
+            payload.get("status") != "PASS"
+            or payload.get("hostname") != "compute-0-2"
+            or payload.get("partition") != expected_partition
+        ):
             raise ResourceError(f"Invalid resource evidence for {stage}")
         stages[stage] = payload
     profile = json.loads(args.profile_selection.read_text(encoding="utf-8"))
@@ -238,6 +246,7 @@ def parser() -> argparse.ArgumentParser:
     stage.add_argument("--gpus", type=int, required=True)
     stage.add_argument("--hostname", required=True)
     stage.add_argument("--job-id", required=True)
+    stage.add_argument("--partition", choices=("cpu", "gpu"), required=True)
     selection = commands.add_parser("select-profile")
     selection.add_argument("--profile-dir", type=Path, required=True)
     selection.add_argument("--output", type=Path, required=True)

@@ -103,7 +103,12 @@ wait_job() {
 
 submit_stage() {
     local stage=$1 cpus=$2 memory=$3 gpus=$4 dependency=${5:-} profile=${6:-} stage_run_dir=${7:-$RUN_DIR}
-    local args=(--parsable --job-name="sepsis_${stage}${profile:+_$profile}" --cpus-per-task="$cpus" --mem="${memory}G")
+    local partition=cpu
+    if [[ "$gpus" == 1 ]]; then
+        [[ "$cpus" -ge 8 ]] || { echo "FAIL: CEDIA gpu QOS requires at least 8 CPUs" >&2; return 1; }
+        partition=gpu
+    fi
+    local args=(--parsable --partition="$partition" --job-name="sepsis_${stage}${profile:+_$profile}" --cpus-per-task="$cpus" --mem="${memory}G")
     [[ "$gpus" == 0 ]] || args+=(--gres=gpu:a100-sxm4-40gb:1)
     [[ -z "$dependency" ]] || args+=(--dependency="afterok:$dependency")
     sbatch "${args[@]}" --export=ALL,PROJECT_DIR="$ROOT",RUN_ID="$RUN_ID",RUN_DIR="$stage_run_dir",PIPELINE_STAGE="$stage",PROFILE_NAME="$profile",REQUESTED_CPUS="$cpus",REQUESTED_MEMORY_GB="$memory",REQUESTED_GPUS="$gpus" jobs/run_experiment.slurm
@@ -130,7 +135,7 @@ else
     wait_job "$PREPARE_JOB"
     PREVIOUS_JOB=$PREPARE_JOB
 fi
-for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu2:2:1 gpu4:4:1 gpu8:8:1; do
+for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     IFS=: read -r name cpus gpus <<< "$spec"
     if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" >/dev/null; then
         PROFILE_JOB=reused

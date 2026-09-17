@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=sepsis_direct_onset
-#SBATCH --partition=gpu
 #SBATCH --nodelist=compute-0-2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -94,7 +93,7 @@ fi
     --stage "${PROFILE_NAME:-$PIPELINE_STAGE}" --time-file "$TIME_FILE" --gpu-log "$GPU_LOG" \
     "${BENCHMARK_ARGS[@]}" --output "$RESOURCE_OUTPUT" --cpus "$REQUESTED_CPUS" \
     --memory-gb "$REQUESTED_MEMORY_GB" --gpus "$REQUESTED_GPUS" \
-    --hostname "$(hostname)" --job-id "$SLURM_JOB_ID"
+    --hostname "$(hostname)" --job-id "$SLURM_JOB_ID" --partition "$SLURM_JOB_PARTITION"
 [[ "$STAGE_STATUS" -eq 0 ]] || exit "$STAGE_STATUS"
 
 if [[ "$PIPELINE_STAGE" == finalize || "$PIPELINE_STAGE" == promote ]]; then

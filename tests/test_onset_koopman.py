@@ -362,9 +362,9 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 ("cpu8", 8, 0, 10.0, 0.90),
                 ("cpu16", 16, 0, 8.0, 0.85),
                 ("cpu32", 32, 0, 7.8, 0.82),
-                ("gpu2", 2, 1, 7.2, 0.50),
-                ("gpu4", 4, 1, 7.0, 0.50),
-                ("gpu8", 8, 1, 7.1, 0.50),
+                ("gpu8", 8, 1, 7.2, 0.50),
+                ("gpu16", 16, 1, 7.0, 0.50),
+                ("gpu32", 32, 1, 7.1, 0.50),
             ]
             for name, cpus, gpus, elapsed, efficiency in profiles:
                 payload = {
@@ -380,7 +380,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 (root / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
             output = root / "selection.json"
             selected = resource_provenance.select_profile(Namespace(profile_dir=root, output=output))
-            self.assertEqual(selected["selected"], {"cpus": 2, "memory_gb": 12, "gpus": 1})
+            self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 12, "gpus": 1})
             self.assertLessEqual(selected["selected"]["cpus"], 32)
             self.assertLessEqual(selected["selected"]["memory_gb"], 64)
 
@@ -391,6 +391,9 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn('TEST_RUN_DIR="$ROOT/runs/${RUN_ID}-tests-${TEST_SUFFIX}"', entrypoint)
         self.assertIn('stage_run_dir=${7:-$RUN_DIR}', entrypoint)
         self.assertIn('--dependency="afterok:$dependency"', entrypoint)
+        self.assertIn('--partition="$partition"', entrypoint)
+        self.assertIn('partition=cpu', entrypoint)
+        self.assertIn('partition=gpu', entrypoint)
         self.assertIn("RESUME_RUN_ID", entrypoint)
         self.assertIn("verify-stage", entrypoint)
         self.assertIn("--nodelist=compute-0-2", job)

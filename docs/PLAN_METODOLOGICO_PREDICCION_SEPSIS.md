@@ -224,7 +224,8 @@ registra el resultado negativo y no se añade una red mayor.
 
 1. suite completa;
 2. `prepare` CPU;
-3. benchmark fijo CPU 8/16/32 y GPU 2/4/8 cores;
+3. benchmark fijo CPU 8/16/32 y GPU 8/16/32 cores; CEDIA exige al menos
+   8 CPU para cualquier job de la partición GPU;
 4. `model` con el perfil seleccionado;
 5. `finalize` CPU;
 6. promoción sólo después del manifiesto de recursos y validación final.
