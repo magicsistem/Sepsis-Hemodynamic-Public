@@ -95,8 +95,8 @@ class ScientificPipelineTests(unittest.TestCase):
 
     def test_left_censored_sepsis_is_not_assigned_false_onset(self):
         patient = patient_frame(labels=(1, 1, 1, 1))
-        onset, status = pipeline.reconstruct_true_onset([0, 1, 1], [1, 2, 3])
-        self.assertEqual((onset, status), (8.0, "exact_from_shift_transition"))
+        reconstructed_onset, status = pipeline.reconstruct_true_onset([0, 1, 1], [1, 2, 3])
+        self.assertEqual((reconstructed_onset, status), (8.0, "exact_from_shift_transition"))
         self.assertTrue(patient["TrueSepsisOnset_ICULOS"].isna().all())
         self.assertEqual(patient["OnsetReconstructionStatus"].unique().tolist(), ["septic_onset_left_censored"])
         targeted = onset.add_primary_target(patient)
