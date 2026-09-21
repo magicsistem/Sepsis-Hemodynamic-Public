@@ -520,6 +520,29 @@ class ResourceOrchestrationTests(unittest.TestCase):
             self.assertEqual(measured["max_memory_used_mib"], 1200.0)
 
     def test_profile_workload_represents_full_model_mix(self):
+        outer = pipeline.MODEL_POLICY["outer_folds"]
+        inner = pipeline.MODEL_POLICY["inner_folds"]
+        candidates = len(pipeline.MODEL_CANDIDATES)
+        lifts = len(koopman.KOOPMAN_POLICY["lifts"])
+        primary_xgb = outer * sum(
+            inner * candidates * (lifts if representation == "C3" else 1) + 1
+            for representation in koopman.REPRESENTATIONS
+        )
+        transport_xgb = 2 * sum(
+            inner * candidates * (lifts if representation == "C3" else 1) + 1
+            for representation in koopman.REPRESENTATIONS
+        )
+        robustness_xgb = outer * len(pipeline.ROBUSTNESS_POLICY["representations"]) * (
+            len(pipeline.robustness_configurations()) - 1
+        )
+        self.assertEqual(
+            pipeline.MODEL_POLICY["planned_full_xgboost_fits"],
+            primary_xgb + transport_xgb + robustness_xgb,
+        )
+        planned_koopman = outer * (inner * lifts + 1) + 2 * (inner * lifts + 1)
+        self.assertEqual(
+            pipeline.MODEL_POLICY["planned_full_koopman_fits"], planned_koopman
+        )
         benchmark_ratio = (
             profile_resources.BENCHMARK_XGBOOST_FITS
             / len(koopman.KOOPMAN_POLICY["lifts"])
