@@ -70,7 +70,8 @@ source cohort and evaluates once in the destination. It is public-source
 transport, not independent external validation.
 
 `run.sh` runs the complete suite, prepares validated data, benchmarks six
-feasible CPU/GPU profiles on a fixed 4,000-patient subset with 200 trees,
+feasible CPU/GPU profiles on a fixed 4,000-patient subset with two Koopman fits
+and ten 200-tree XGBoost fits (a 5:1 mix versus the planned 278:49 mix),
 selects the smallest eligible profile within 5% of the
 fastest, and links model/finalize jobs with `afterok`. CPU eligibility requires
 more than 50% active compute efficiency. GPU eligibility requires more than

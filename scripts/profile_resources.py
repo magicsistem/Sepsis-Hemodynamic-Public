@@ -16,6 +16,10 @@ from src import onset_koopman as onset
 from src import scientific_pipeline as pipeline
 
 
+BENCHMARK_XGBOOST_FITS = 10
+BENCHMARK_XGBOOST_ESTIMATORS = 200
+
+
 def fixed_patients(features: pd.DataFrame, per_source_outcome: int = 1000) -> list[str]:
     decisions = onset.primary_decisions(features)
     patients = decisions.groupby("Patient_ID", sort=True).agg(
@@ -55,12 +59,19 @@ def benchmark(run_dir: Path, output: Path) -> dict:
     gpu = pipeline.gpu_runtime()
     if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
         raise pipeline.PipelineError(f"GPU benchmark requires a usable device: {gpu['reason']}")
-    model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, gpu, n_estimators=200)
     xgboost_start = time.perf_counter()
-    pipeline.fit_xgb(model, decisions, columns, target_column=onset.TARGET_COLUMN)
-    probability = model.predict_proba(pipeline.matrix(decisions, columns))[:, 1]
+    probability = None
+    for fit_index in range(BENCHMARK_XGBOOST_FITS):
+        model = pipeline.xgb_model(
+            pipeline.MODEL_CANDIDATES[0],
+            pipeline.SEED + fit_index,
+            gpu,
+            n_estimators=BENCHMARK_XGBOOST_ESTIMATORS,
+        )
+        pipeline.fit_xgb(model, decisions, columns, target_column=onset.TARGET_COLUMN)
+        probability = model.predict_proba(pipeline.matrix(decisions, columns))[:, 1]
     xgboost_seconds = time.perf_counter() - xgboost_start
-    if not np.isfinite(probability).all():
+    if probability is None or not np.isfinite(probability).all():
         raise pipeline.PipelineError("Resource benchmark produced invalid probabilities")
     compute_seconds = time.perf_counter() - compute_start
     compute_cpu_seconds = time.process_time() - compute_cpu_start
@@ -98,12 +109,22 @@ def benchmark(run_dir: Path, output: Path) -> dict:
         "rows_per_compute_second": len(subset) / compute_seconds,
         "koopman_fit_seconds": fit_seconds,
         "koopman_training_transition_counts": transition_counts,
-        "xgboost_fits": 1,
-        "xgboost_estimators": 200,
+        "xgboost_fits": BENCHMARK_XGBOOST_FITS,
+        "xgboost_estimators_per_fit": BENCHMARK_XGBOOST_ESTIMATORS,
         "xgboost_fit_predict_seconds": xgboost_seconds,
         "planned_full_xgboost_fits": pipeline.MODEL_POLICY[
             "planned_full_xgboost_fits"
         ],
+        "planned_full_koopman_fits": pipeline.MODEL_POLICY[
+            "planned_full_koopman_fits"
+        ],
+        "benchmark_xgboost_to_koopman_fit_ratio": (
+            BENCHMARK_XGBOOST_FITS / len(onset.KOOPMAN_POLICY["lifts"])
+        ),
+        "planned_xgboost_to_koopman_fit_ratio": (
+            pipeline.MODEL_POLICY["planned_full_xgboost_fits"]
+            / pipeline.MODEL_POLICY["planned_full_koopman_fits"]
+        ),
         "gpu": gpu,
         "full_feature_memory_gb": full_feature_gb,
         "largest_outer_quadratic_matrix_gb": largest_outer_quadratic_gb,

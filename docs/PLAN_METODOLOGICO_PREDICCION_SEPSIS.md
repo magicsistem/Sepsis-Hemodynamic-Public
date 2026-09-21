@@ -247,8 +247,8 @@ registra el resultado negativo y no se añade una red mayor.
 
 1. suite completa;
 2. `prepare` CPU;
-3. benchmark estratificado fijo de 4,000 pacientes y 200 árboles, CPU 8/16/32 y
-   GPU 8/16/32 cores; CEDIA exige al menos
+3. benchmark estratificado fijo de 4,000 pacientes, dos lifts Koopman y diez
+   fits XGBoost de 200 árboles, CPU 8/16/32 y GPU 8/16/32 cores; CEDIA exige al menos
    8 CPU para cualquier job de la partición GPU;
 4. `model` con el perfil seleccionado;
 5. `finalize` CPU;
@@ -263,6 +263,11 @@ medido/estimado +20 %, redondeada a 2 GB; 64 GB es un techo, no un objetivo.
 `prepare` usa un CPU y 10 GB, derivados del pico observado más 20 %, porque más
 threads no aceleraron esa ruta serial. El muestreo GPU se hace cada segundo para
 no perder fits cortos. No se llena memoria artificialmente.
+
+La mezcla del benchmark aproxima la carga planificada: 10/2 = 5 fits XGBoost
+por ajuste Koopman frente a 278/49 = 5.67 en el run completo. Un benchmark de
+un solo XGBoost habría sobreponderado la transformación y no es aceptable para
+elegir CPU frente a GPU.
 
 Las recomendaciones sobre citas de la revista, título, Abstract, contribuciones,
 Discussion, Conclusion, trabajos futuros y special issues quedan

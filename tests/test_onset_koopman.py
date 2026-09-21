@@ -16,7 +16,7 @@ import pandas as pd
 
 from src import onset_koopman as koopman
 from src import scientific_pipeline as pipeline
-from scripts import resource_provenance
+from scripts import profile_resources, resource_provenance
 
 
 def patient(patient_id: str, times, labels, onset, status, hr) -> pd.DataFrame:
@@ -518,6 +518,17 @@ class ResourceOrchestrationTests(unittest.TestCase):
             self.assertEqual((measured["samples"], measured["active_samples"]), (3, 2))
             self.assertEqual(measured["mean_active_utilization_percent"], 70.0)
             self.assertEqual(measured["max_memory_used_mib"], 1200.0)
+
+    def test_profile_workload_represents_full_model_mix(self):
+        benchmark_ratio = (
+            profile_resources.BENCHMARK_XGBOOST_FITS
+            / len(koopman.KOOPMAN_POLICY["lifts"])
+        )
+        planned_ratio = (
+            pipeline.MODEL_POLICY["planned_full_xgboost_fits"]
+            / pipeline.MODEL_POLICY["planned_full_koopman_fits"]
+        )
+        self.assertLess(abs(benchmark_ratio - planned_ratio) / planned_ratio, 0.15)
 
     def test_profile_selection_caps_efficiency_and_memory_margin(self):
         with tempfile.TemporaryDirectory() as directory:

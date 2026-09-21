@@ -90,6 +90,7 @@ MODEL_POLICY = {
     "xgboost_threads": "SLURM_CPUS_PER_TASK_or_os_cpu_count_capped_at_32",
     "maximum_cpu_threads": 32,
     "planned_full_xgboost_fits": 278,
+    "planned_full_koopman_fits": 49,
     "xgboost_objective": "binary:logistic",
     "xgboost_eval_metric": "logloss",
 }
