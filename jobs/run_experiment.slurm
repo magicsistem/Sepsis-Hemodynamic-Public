@@ -50,7 +50,7 @@ echo CEDIA_ENVIRONMENT_END
 TIME_FILE="$RUN_DIR/resources/${PIPELINE_STAGE}-${SLURM_JOB_ID}.time"
 GPU_LOG="$RUN_DIR/resources/${PIPELINE_STAGE}-${SLURM_JOB_ID}.gpu.csv"
 if [[ "$REQUESTED_GPUS" == 1 ]]; then
-    (while true; do nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits; sleep 15; done) > "$GPU_LOG" &
+    (while true; do nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits; sleep 1; done) > "$GPU_LOG" &
     GPU_SAMPLER_PID=$!
     CONTAINER_GPU_ARGS=(--nv)
     REQUIRE_GPU=true

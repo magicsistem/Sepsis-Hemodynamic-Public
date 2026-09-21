@@ -59,16 +59,26 @@ cluster bootstraps. DCA evaluates action now for onset in 1--6 hours against
 C0, treat-all, and treat-none. No bootstrap sign proportion is called a formal
 null test.
 
+C0--C3 are the representation ablation. Prespecified C0/C3 seed and training-
+balance sensitivities are stored as one paired wide OOF table (one row identity,
+ten probability columns), summarized without selecting a winner, and linked in
+the final lineage.
+
 Challenge Utility delegates to the unchanged pinned official scorer. A/B
 transport fits every representation, model, calibrator, and threshold in the
 source cohort and evaluates once in the destination. It is public-source
 transport, not independent external validation.
 
 `run.sh` runs the complete suite, prepares validated data, benchmarks six
-feasible CPU/GPU profiles, selects the smallest profile within 5% of the
-fastest (GPU only when more than 5% faster), and links model/finalize jobs with
-`afterok`. The bounds are 32 CPU, 64 GB RAM, and one A100 40 GB. Every stage
-records measured CPU, RAM, GPU, run ID, commit, and source inventory. Promotion
+feasible CPU/GPU profiles on a fixed 4,000-patient subset with 200 trees,
+selects the smallest eligible profile within 5% of the
+fastest, and links model/finalize jobs with `afterok`. CPU eligibility requires
+more than 50% active compute efficiency. GPU eligibility requires more than
+50% mean utilization across at least three active one-second samples and more
+than 5% total speedup over the best eligible CPU profile. The bounds are 32
+CPU, 64 GB RAM, and one A100 40 GB; RAM is requested from measured/estimated
+peak plus 20%. Every stage records measured CPU, RAM, GPU, run ID, commit, and
+source inventory. Promotion
 independently reconciles those records and all scientific products, rejects
 unlisted/tampered artifacts, and never turns successful execution alone into a
 scientific PASS.

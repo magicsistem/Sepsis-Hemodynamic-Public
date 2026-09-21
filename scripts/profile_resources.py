@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from src import onset_koopman as onset
 from src import scientific_pipeline as pipeline
 
 
-def fixed_patients(features: pd.DataFrame, per_source_outcome: int = 250) -> list[str]:
+def fixed_patients(features: pd.DataFrame, per_source_outcome: int = 1000) -> list[str]:
     decisions = onset.primary_decisions(features)
     patients = decisions.groupby("Patient_ID", sort=True).agg(
         SourceSet=("SourceSet", "first"), outcome=(onset.TARGET_COLUMN, "max")
@@ -35,6 +36,7 @@ def benchmark(run_dir: Path, output: Path) -> dict:
     subset = features.loc[features["Patient_ID"].isin(patients)].reset_index(drop=True)
     io_seconds = time.perf_counter() - io_start
     compute_start = time.perf_counter()
+    compute_cpu_start = time.process_time()
     supported = onset.select_dynamic_signals(subset, pipeline.DYNAMIC_COLUMNS, 0.05, 25, 20)
     if not supported:
         raise pipeline.PipelineError("Fixed benchmark has no supported dynamic signal")
@@ -51,18 +53,37 @@ def benchmark(run_dir: Path, output: Path) -> dict:
     decisions = onset.primary_decisions(transformed)
     columns = pipeline.primary_model_features(transformed, "C3")
     gpu = pipeline.gpu_runtime()
-    if __import__("os").environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
+    if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
         raise pipeline.PipelineError(f"GPU benchmark requires a usable device: {gpu['reason']}")
-    model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, gpu, n_estimators=50)
+    model = pipeline.xgb_model(pipeline.MODEL_CANDIDATES[0], pipeline.SEED, gpu, n_estimators=200)
+    xgboost_start = time.perf_counter()
     pipeline.fit_xgb(model, decisions, columns, target_column=onset.TARGET_COLUMN)
     probability = model.predict_proba(pipeline.matrix(decisions, columns))[:, 1]
+    xgboost_seconds = time.perf_counter() - xgboost_start
     if not np.isfinite(probability).all():
         raise pipeline.PipelineError("Resource benchmark produced invalid probabilities")
     compute_seconds = time.perf_counter() - compute_start
+    compute_cpu_seconds = time.process_time() - compute_cpu_start
+    cpus = pipeline.allocated_cpu_count()
     state_width = min(len(supported), onset.KOOPMAN_POLICY["maximum_signals"]) * 2
     quadratic_width = state_width + state_width * (state_width + 1) // 2
     full_feature_gb = float(features.memory_usage(index=True, deep=True).sum() / 1024 ** 3)
     largest_outer_quadratic_gb = float(len(features) * 0.8 * quadratic_width * 4 / 1024 ** 3)
+    eligible_rows = int((features[onset.ELIGIBLE_COLUMN] == 1).sum())
+    identity_sample = features.loc[
+        features[onset.ELIGIBLE_COLUMN] == 1,
+        ["Patient_ID", "SourceSet", "OnsetReconstructionStatus"],
+    ].head(10000)
+    identity_bytes_per_row = float(
+        identity_sample.memory_usage(index=False, deep=True).sum()
+        / len(identity_sample)
+    )
+    primary_oof_pair_gb = float(
+        eligible_rows * (identity_bytes_per_row + 11 * 8) * 2 / 1024 ** 3
+    )
+    robustness_wide_gb = float(
+        eligible_rows * (identity_bytes_per_row + 3 * 8 + 10 * 4) / 1024 ** 3
+    )
     payload = {
         "status": "PASS",
         "fixed_subset_patient_hash": pipeline.stable_hash(patients),
@@ -71,16 +92,34 @@ def benchmark(run_dir: Path, output: Path) -> dict:
         "selected_signals": list(supported),
         "io_seconds": io_seconds,
         "compute_seconds": compute_seconds,
+        "compute_cpu_seconds": compute_cpu_seconds,
+        "active_cpu_efficiency": compute_cpu_seconds / (compute_seconds * cpus),
         "total_seconds": io_seconds + compute_seconds,
         "rows_per_compute_second": len(subset) / compute_seconds,
         "koopman_fit_seconds": fit_seconds,
         "koopman_training_transition_counts": transition_counts,
         "xgboost_fits": 1,
+        "xgboost_estimators": 200,
+        "xgboost_fit_predict_seconds": xgboost_seconds,
+        "planned_full_xgboost_fits": pipeline.MODEL_POLICY[
+            "planned_full_xgboost_fits"
+        ],
         "gpu": gpu,
         "full_feature_memory_gb": full_feature_gb,
         "largest_outer_quadratic_matrix_gb": largest_outer_quadratic_gb,
-        "estimated_full_peak_gb": full_feature_gb + 2 * largest_outer_quadratic_gb,
-        "estimation_note": "feature-frame memory plus two largest outer-fold quadratic matrices; no artificial allocation",
+        "primary_oof_pair_estimated_gb": primary_oof_pair_gb,
+        "robustness_wide_oof_estimated_gb": robustness_wide_gb,
+        "estimated_full_peak_gb": (
+            full_feature_gb
+            + 2 * largest_outer_quadratic_gb
+            + primary_oof_pair_gb
+            + robustness_wide_gb
+        ),
+        "estimation_note": (
+            "feature frame, two largest outer-fold quadratic matrices, paired "
+            "C0/C3 primary OOF, and one identity plus ten float32 robustness "
+            "probability columns; no artificial allocation"
+        ),
     }
     pipeline.atomic_json(output, payload)
     return payload

@@ -12,7 +12,8 @@ No report has a hard-coded metric, threshold, feature count, ECE, or p-value.
 The experimental report data include OOF predictions with fold provenance,
 nested selection records, C0--C3 representation comparisons, metrics,
 reliability rows, patient event/alarm rows, DCA, paired DCA inference,
-SourceSet transport, inference, resource evidence, and the manifest chain.
+SourceSet transport, prespecified seed/training-balance OOF sensitivities,
+inference, resource evidence, and the manifest chain.
 Missing or hash-mismatched artifacts cause validation failure, not a partial
 statistics package.
 

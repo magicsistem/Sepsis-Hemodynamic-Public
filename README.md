@@ -36,6 +36,9 @@ hash- and source-bound stage checkpoints and refuses incompatible partials.
   observed deltas/slopes; C3 adds fold-local EDMD/Koopman innovations. Model,
   representation, tree count, calibration identity, and alarm threshold are
   selected without access to the outer fold.
+- C0--C3 form the representation ablation. C0 and C3 also report every
+  prespecified seed and training-balance sensitivity as raw OOF results; none
+  may replace the primary nested result.
 - Useful alarms occur from onset−6 h through onset−1 h, with a six-hour
   refractory rising-edge policy and a maximum inner-OOF burden of 0.25 false
   episodes per eligible patient-day.
@@ -45,7 +48,10 @@ hash- and source-bound stage checkpoints and refuses incompatible partials.
   validation. MIMIC/eICU external validation remains unavailable without the
   required credentialed cohorts.
 - CPU/GPU profiles are measured before the model stage; selection is bounded
-  to 32 CPU, 64 GB RAM, and one A100 40 GB, with no artificial memory fill.
+  to 32 CPU, 64 GB RAM, and one A100 40 GB. A CPU profile must exceed 50%
+  active compute efficiency; a GPU profile must exceed 50% mean utilization
+  over at least three active one-second samples and improve total time by more
+  than 5%. RAM is measured/estimated peak plus 20%, never artificial fill.
 
 Historical files under `results/` and `external_artifacts/` are retained as
 evidence only. The corrected pipeline never reads them.

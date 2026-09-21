@@ -39,7 +39,7 @@ from src import onset_koopman as onset
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
 
-PIPELINE_VERSION = "scientific-pipeline-v5-direct-onset-koopman"
+PIPELINE_VERSION = "scientific-pipeline-v6-direct-onset-koopman-robustness"
 SEED = 20260906
 OFFICIAL_UTILITY_SHA256 = "26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5"
 DATA_POLICY = {
@@ -83,13 +83,26 @@ MODEL_POLICY = {
     "selection_metric": "sklearn_average_precision_equal_total_weight_per_patient_on_inner_held_out_decision_hours",
     "candidate_tie_break": "lower max_depth after exactly equal mean inner-fold Average Precision",
     "tree_count_aggregation": "median inner best iteration then Python round, minimum one",
+    "inner_oof_prediction_source": "held-out early-stopped winner predictions; no redundant refit",
     "candidates": MODEL_CANDIDATES,
     "early_stopping_max_estimators": 600,
     "early_stopping_rounds": 30,
     "xgboost_threads": "SLURM_CPUS_PER_TASK_or_os_cpu_count_capped_at_32",
     "maximum_cpu_threads": 32,
+    "planned_full_xgboost_fits": 278,
     "xgboost_objective": "binary:logistic",
     "xgboost_eval_metric": "logloss",
+}
+ROBUSTNESS_POLICY = {
+    "representations": ("C0", "C3"),
+    "training_seed_bases": (SEED, SEED + 101, SEED + 202),
+    "balance_policies": (
+        "equal_patient",
+        "equal_row",
+        "equal_patient_then_row_class",
+    ),
+    "estimand": "raw-probability ranking stability; no configuration is selected",
+    "evaluation_weighting": "equal total weight per patient",
 }
 
 
@@ -221,6 +234,8 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
         "feature_policy_hash": stable_hash(FEATURE_POLICY),
         "model_policy": MODEL_POLICY,
         "model_policy_hash": stable_hash(MODEL_POLICY),
+        "robustness_policy": ROBUSTNESS_POLICY,
+        "robustness_policy_hash": stable_hash(ROBUSTNESS_POLICY),
         "seed": SEED,
         "pythonhashseed": os.environ.get("PYTHONHASHSEED", "unset"),
         "dependencies": dependency_versions(),
@@ -670,14 +685,40 @@ def fit_xgb(
     columns: list[str],
     validation: pd.DataFrame | None = None,
     target_column: str = "SepsisLabel",
+    weight_policy: str = "equal_patient",
 ) -> Any:
-    kwargs: dict[str, Any] = {"sample_weight": equal_patient_weights(train), "verbose": False}
+    kwargs: dict[str, Any] = {
+        "sample_weight": model_training_weights(train, target_column, weight_policy),
+        "verbose": False,
+    }
     if validation is not None:
         kwargs.update({
             "eval_set": [(matrix(validation, columns), validation[target_column])],
-            "sample_weight_eval_set": [equal_patient_weights(validation)],
+            "sample_weight_eval_set": [
+                model_training_weights(validation, target_column, weight_policy)
+            ],
         })
     return model.fit(matrix(train, columns), train[target_column], **kwargs)
+
+
+def model_training_weights(
+    frame: pd.DataFrame,
+    target_column: str,
+    policy: str,
+) -> np.ndarray:
+    """Predeclared training weights; evaluation always remains patient-balanced."""
+    target = binary_array(frame[target_column], f"Training weights {policy}")
+    if policy == "equal_row":
+        return np.ones(len(frame), dtype=float)
+    weights = equal_patient_weights(frame)
+    if policy == "equal_patient":
+        return weights
+    if policy != "equal_patient_then_row_class":
+        raise PipelineError(f"Unknown training-weight policy: {policy}")
+    class_mass = np.bincount(target, weights=weights, minlength=2)
+    if len(class_mass) != 2 or (class_mass <= 0).any():
+        raise PipelineError("Class-balanced training weights require both outcome classes")
+    return weights / (2.0 * class_mass[target])
 
 
 PRIMARY_OOF_COLUMNS = [
@@ -747,36 +788,6 @@ def transform_primary_representation(frame: pd.DataFrame, fitted: dict[str, Any]
     return pd.concat([frame, derived], axis=1)
 
 
-def _primary_fit_and_predict(
-    fit_full: pd.DataFrame,
-    valid_full: pd.DataFrame,
-    representation: str,
-    lift: str,
-    candidate: dict[str, Any],
-    rounds: int,
-    gpu: dict[str, Any],
-    seed: int,
-    early_stopping: bool,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    representation_fit = fit_primary_representation(fit_full, representation, lift)
-    fit_transformed = transform_primary_representation(fit_full, representation_fit)
-    valid_transformed = transform_primary_representation(valid_full, representation_fit)
-    fit = onset.primary_decisions(fit_transformed)
-    valid = onset.primary_decisions(valid_transformed)
-    columns = primary_model_features(fit_transformed, representation)
-    model = xgb_model(candidate, seed, gpu, rounds, early_stopping=early_stopping)
-    fit_xgb(model, fit, columns, valid if early_stopping else None, target_column=onset.TARGET_COLUMN)
-    probability = model.predict_proba(matrix(valid, columns))[:, 1]
-    detail = {
-        "model": model,
-        "representation_fit": representation_fit,
-        "columns": columns,
-        "valid_identity": valid[["Patient_ID", "ICULOS"]].copy(),
-        "selected_signals": list(representation_fit["selected_signals"]),
-    }
-    return probability, detail
-
-
 def select_inner_primary_model(
     train: pd.DataFrame,
     representation: str,
@@ -793,6 +804,10 @@ def select_inner_primary_model(
     candidates = [(lift, candidate) for lift in lifts for candidate in MODEL_CANDIDATES]
     scores: dict[tuple[str, str], list[float]] = {(lift, candidate["id"]): [] for lift, candidate in candidates}
     rounds: dict[tuple[str, str], list[int]] = {(lift, candidate["id"]): [] for lift, candidate in candidates}
+    validation_rows: dict[tuple[str, int], pd.DataFrame] = {}
+    candidate_probabilities: dict[tuple[str, str], list[np.ndarray]] = {
+        (lift, candidate["id"]): [] for lift, candidate in candidates
+    }
     selection_detail: list[dict[str, Any]] = []
     for lift_index, lift in enumerate(lifts):
         for inner_fold, (fit_idx, valid_idx) in enumerate(splits):
@@ -805,6 +820,11 @@ def select_inner_primary_model(
             valid_transformed = transform_primary_representation(valid_full, representation_fit)
             fit = onset.primary_decisions(fit_transformed)
             valid = onset.primary_decisions(valid_transformed)
+            validation_rows[(lift, inner_fold)] = valid[[
+                "Patient_ID", "SourceSet", "ICULOS", "SepsisLabel",
+                "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus",
+                onset.TARGET_COLUMN, onset.ELIGIBLE_COLUMN,
+            ]].copy()
             columns = primary_model_features(fit_transformed, representation)
             koopman_fit = representation_fit["koopman"]
             transition_counts = (
@@ -820,11 +840,13 @@ def select_inner_primary_model(
                 )
                 fit_xgb(model, fit, columns, valid, target_column=onset.TARGET_COLUMN)
                 valid_scored = valid.copy()
-                valid_scored["probability"] = model.predict_proba(matrix(valid, columns))[:, 1]
+                probability = model.predict_proba(matrix(valid, columns))[:, 1]
+                valid_scored["probability"] = probability
                 score = onset.patient_balanced_average_precision(valid_scored, "probability")
                 best_round = int(getattr(model, "best_iteration", model.n_estimators - 1)) + 1
                 scores[(lift, candidate["id"])].append(score)
                 rounds[(lift, candidate["id"])].append(best_round)
+                candidate_probabilities[(lift, candidate["id"])].append(probability)
                 selection_detail.append({
                     "lift": lift,
                     "candidate": candidate["id"],
@@ -847,17 +869,10 @@ def select_inner_primary_model(
     winner = next(candidate for candidate in MODEL_CANDIDATES if candidate["id"] == winner_id)
     selected_rounds = max(1, int(round(float(np.median(rounds[(winner_lift, winner_id)])))))
     inner_rows: list[pd.DataFrame] = []
-    for inner_fold, (fit_idx, valid_idx) in enumerate(splits):
-        fit_patients = patient.iloc[fit_idx]["Patient_ID"]
-        valid_patients = patient.iloc[valid_idx]["Patient_ID"]
-        fit_full = train.loc[patient_mask(train, fit_patients)].copy()
-        valid_full = train.loc[patient_mask(train, valid_patients)].copy()
-        probability, _ = _primary_fit_and_predict(
-            fit_full, valid_full, representation, winner_lift, winner,
-            selected_rounds, gpu, split_seed + outer_fold * 10000 + inner_fold,
-            early_stopping=False,
-        )
-        valid = onset.primary_decisions(valid_full).copy()
+    for inner_fold, probability in enumerate(
+        candidate_probabilities[(winner_lift, winner_id)]
+    ):
+        valid = validation_rows[(winner_lift, inner_fold)].copy()
         valid["prob_raw"] = probability
         valid["InnerFold"] = inner_fold
         inner_rows.append(valid[[
@@ -1066,6 +1081,7 @@ def primary_outer_oof(
     """Fully nested C0--C3 OOF predictions for true onset in 1--6 hours."""
     merged = require_fold_context(features, folds).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
     records: list[pd.DataFrame] = []
+    robustness_records: list[pd.DataFrame] = []
     selection_rows: list[dict[str, Any]] = []
     inner_detail_rows: list[dict[str, Any]] = []
     for outer_fold in sorted(merged["Fold"].unique()):
@@ -1091,6 +1107,37 @@ def primary_outer_oof(
         transformed_test["prob_calibrated"] = onset.apply_calibration(calibration, transformed_test["prob_raw"])
         transformed_test["nested_alarm_threshold"] = threshold
         records.append(transformed_test[PRIMARY_OOF_COLUMNS])
+        if representation in ROBUSTNESS_POLICY["representations"]:
+            test_decisions = onset.primary_decisions(transformed_test).sort_values(
+                ["Patient_ID", "ICULOS"], kind="mergesort"
+            ).reset_index(drop=True)
+            robustness = test_decisions[ROBUSTNESS_IDENTITY_COLUMNS].copy()
+            primary_seed = ROBUSTNESS_POLICY["training_seed_bases"][0]
+            for seed_base, balance_policy, _ in robustness_configurations():
+                if seed_base == primary_seed and balance_policy == "equal_patient":
+                    probability = probability_array(
+                        test_decisions["prob_raw"], "Primary robustness OOF"
+                    )
+                else:
+                    sensitivity_model = xgb_model(
+                        candidate, seed_base + int(outer_fold), gpu, rounds
+                    )
+                    fit_xgb(
+                        sensitivity_model,
+                        train_decisions,
+                        columns,
+                        target_column=onset.TARGET_COLUMN,
+                        weight_policy=balance_policy,
+                    )
+                    probability = sensitivity_model.predict_proba(
+                        matrix(test_decisions, columns)
+                    )[:, 1]
+                robustness[robustness_probability_column(
+                    representation, seed_base, balance_policy
+                )] = probability_array(
+                    probability, "Robustness raw probability"
+                ).astype(np.float32)
+            robustness_records.append(robustness)
         inner_detail_rows.extend({"representation": representation, "outer_fold": int(outer_fold), **row} for row in detail)
         selection_rows.append({
             "representation": representation,
@@ -1129,6 +1176,21 @@ def primary_outer_oof(
     if persist_oof:
         atomic_csv(oof, oof_path)
         oof = pd.read_csv(oof_path)
+    robustness_oof = None
+    if representation in ROBUSTNESS_POLICY["representations"]:
+        robustness_oof = pd.concat(robustness_records, ignore_index=True).sort_values(
+            ["Patient_ID", "ICULOS"], kind="mergesort"
+        ).reset_index(drop=True)
+        expected_columns = ROBUSTNESS_IDENTITY_COLUMNS + [
+            robustness_probability_column(representation, seed, balance)
+            for seed, balance, _ in robustness_configurations()
+        ]
+        if (
+            len(robustness_oof) != len(onset.primary_decisions(merged))
+            or list(robustness_oof.columns) != expected_columns
+            or robustness_oof.duplicated(["Patient_ID", "ICULOS"]).any()
+        ):
+            raise PipelineError("Robustness OOF is incomplete or duplicated")
     return oof, {
         "representation": representation,
         "outcome_estimand": "true reconstructed onset in 1--6 hours",
@@ -1138,7 +1200,216 @@ def primary_outer_oof(
         "selection_sha256": sha256_file(selection_path),
         "inner_selection_artifact": inner_detail_path.name,
         "inner_selection_sha256": sha256_file(inner_detail_path),
+        "robustness_oof": robustness_oof,
     }
+
+
+def robustness_configurations() -> tuple[tuple[int, str, str], ...]:
+    """Prespecified sensitivity configurations; none may replace the primary result."""
+    primary_seed = ROBUSTNESS_POLICY["training_seed_bases"][0]
+    return tuple(
+        (seed, "equal_patient", "seed_stability")
+        for seed in ROBUSTNESS_POLICY["training_seed_bases"]
+    ) + tuple(
+        (primary_seed, policy, "balance_sensitivity")
+        for policy in ROBUSTNESS_POLICY["balance_policies"]
+        if policy != "equal_patient"
+    )
+
+
+ROBUSTNESS_IDENTITY_COLUMNS = [
+    "Patient_ID", "SourceSet", "ICULOS", "Fold", onset.TARGET_COLUMN,
+]
+
+
+def robustness_probability_column(
+    representation: str,
+    seed_base: int,
+    balance_policy: str,
+) -> str:
+    return (
+        f"prob_raw__{representation}__seed_{seed_base}__{balance_policy}"
+    )
+
+
+def combine_robustness_oof(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Combine paired C0/C3 probabilities without repeating row identities."""
+    if set(frames) != set(ROBUSTNESS_POLICY["representations"]):
+        raise PipelineError("Robustness OOF representations are incomplete")
+    base = frames[ROBUSTNESS_POLICY["representations"][0]].copy()
+    for representation in ROBUSTNESS_POLICY["representations"][1:]:
+        frame = frames[representation]
+        try:
+            pd.testing.assert_frame_equal(
+                base[ROBUSTNESS_IDENTITY_COLUMNS],
+                frame[ROBUSTNESS_IDENTITY_COLUMNS],
+                check_dtype=False,
+            )
+        except AssertionError as exc:
+            raise PipelineError("Robustness representation identities are not paired") from exc
+        for seed, balance, _ in robustness_configurations():
+            column = robustness_probability_column(representation, seed, balance)
+            base[column] = frame[column].to_numpy(dtype=np.float32)
+    return base
+
+
+def robustness_summary(robustness_oof: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize every prespecified seed/balance result without winner selection."""
+    rows = []
+    keys = ["representation", "training_seed_base", "balance_policy", "analysis_family"]
+    target = binary_array(robustness_oof[onset.TARGET_COLUMN], "Robustness summary")
+    weights = onset.equal_patient_weights(robustness_oof)
+    for representation in ROBUSTNESS_POLICY["representations"]:
+        for seed, balance, family in robustness_configurations():
+            probability = probability_array(
+                robustness_oof[
+                    robustness_probability_column(representation, seed, balance)
+                ],
+                "Robustness summary",
+            )
+            rows.append({
+                **dict(zip(keys, (representation, seed, balance, family))),
+                "n_decision_hours": int(len(robustness_oof)),
+                "n_patients": int(robustness_oof["Patient_ID"].nunique()),
+                "patient_balanced_average_precision": float(
+                    average_precision_score(target, probability, sample_weight=weights)
+                ),
+                "patient_balanced_auroc": float(
+                    roc_auc_score(target, probability, sample_weight=weights)
+                ),
+                "patient_balanced_brier_uncalibrated": float(
+                    brier_score_loss(target, probability, sample_weight=weights)
+                ),
+                "configuration_selected": False,
+            })
+    summary = pd.DataFrame(rows).sort_values(keys, kind="mergesort").reset_index(drop=True)
+    comparator = summary.loc[summary["representation"] == "C0"].drop(
+        columns="representation"
+    )
+    candidate = summary.loc[summary["representation"] == "C3"].drop(
+        columns="representation"
+    )
+    paired = comparator.merge(
+        candidate,
+        on=["training_seed_base", "balance_policy", "analysis_family"],
+        suffixes=("_C0", "_C3"),
+        validate="one_to_one",
+    )
+    for metric in (
+        "patient_balanced_average_precision",
+        "patient_balanced_auroc",
+        "patient_balanced_brier_uncalibrated",
+    ):
+        paired[f"C3_minus_C0_{metric}"] = paired[f"{metric}_C3"] - paired[f"{metric}_C0"]
+    paired["configuration_selected"] = False
+    return summary, paired
+
+
+def representation_ablation_summary(
+    summaries: dict[str, dict[str, Any]],
+) -> pd.DataFrame:
+    """Data-driven C0--C3 ablation table; it never selects a representation."""
+    definitions = {
+        "C0": "baseline plus causal CV",
+        "C1": "40-predictor causal state",
+        "C2": "C1 plus deltas and slopes",
+        "C3": "C1 plus Koopman innovations",
+    }
+    rows = []
+    for representation in onset.REPRESENTATIONS:
+        summary = summaries[representation]
+        alarm = summary["alarm_policy"]
+        rows.append({
+            "representation": representation,
+            "ablation_definition": definitions[representation],
+            "patient_balanced_average_precision": summary[
+                "patient_balanced_average_precision"
+            ],
+            "patient_balanced_brier": summary["patient_balanced_brier"],
+            "useful_sensitivity": alarm["useful_sensitivity"],
+            "false_alarm_episodes_per_patient_day": alarm[
+                "false_alarm_episodes_per_patient_day"
+            ],
+            "delta_average_precision_vs_C0": summary[
+                "patient_balanced_average_precision"
+            ] - summaries["C0"]["patient_balanced_average_precision"],
+            "configuration_selected": False,
+        })
+    return pd.DataFrame(rows)
+
+
+def master_result_table(
+    summaries: dict[str, dict[str, Any]],
+    transport: pd.DataFrame,
+    robustness: pd.DataFrame,
+) -> pd.DataFrame:
+    """One data-driven inventory of every executed current-run model result."""
+    rows = []
+    for representation in onset.REPRESENTATIONS:
+        summary = summaries[representation]
+        alarm = summary["alarm_policy"]
+        rows.append({
+            "analysis_family": "primary_nested_internal",
+            "experiment": "mixed_A_B_patient_grouped_outer_CV",
+            "representation": representation,
+            "probability_state": "nested_calibrated",
+            "training_seed_base": SEED,
+            "balance_policy": "equal_patient",
+            "patient_balanced_average_precision": summary[
+                "patient_balanced_average_precision"
+            ],
+            "patient_balanced_auroc": summary["patient_balanced_auroc"],
+            "patient_balanced_brier": summary["patient_balanced_brier"],
+            "useful_sensitivity": alarm["useful_sensitivity"],
+            "false_alarm_episodes_per_patient_day": alarm[
+                "false_alarm_episodes_per_patient_day"
+            ],
+            "median_lead_time_hours": alarm["median_lead_time_hours"],
+            "configuration_selected": False,
+        })
+    for result in transport.to_dict("records"):
+        rows.append({
+            "analysis_family": "source_transport",
+            "experiment": result["experiment"],
+            "representation": result["representation"],
+            "probability_state": "train_source_nested_calibrated",
+            "training_seed_base": SEED,
+            "balance_policy": "equal_patient",
+            "patient_balanced_average_precision": result[
+                "patient_balanced_average_precision"
+            ],
+            "patient_balanced_auroc": result["patient_balanced_auroc"],
+            "patient_balanced_brier": result["patient_balanced_brier"],
+            "useful_sensitivity": result["useful_sensitivity"],
+            "false_alarm_episodes_per_patient_day": result[
+                "false_alarm_episodes_per_patient_day"
+            ],
+            "median_lead_time_hours": result["median_lead_time_hours"],
+            "configuration_selected": False,
+        })
+    for result in robustness.to_dict("records"):
+        rows.append({
+            "analysis_family": result["analysis_family"],
+            "experiment": (
+                f"seed_{result['training_seed_base']}_balance_{result['balance_policy']}"
+            ),
+            "representation": result["representation"],
+            "probability_state": "raw_uncalibrated_sensitivity_only",
+            "training_seed_base": result["training_seed_base"],
+            "balance_policy": result["balance_policy"],
+            "patient_balanced_average_precision": result[
+                "patient_balanced_average_precision"
+            ],
+            "patient_balanced_auroc": result["patient_balanced_auroc"],
+            "patient_balanced_brier": result[
+                "patient_balanced_brier_uncalibrated"
+            ],
+            "useful_sensitivity": math.nan,
+            "false_alarm_episodes_per_patient_day": math.nan,
+            "median_lead_time_hours": math.nan,
+            "configuration_selected": False,
+        })
+    return pd.DataFrame(rows)
 
 
 def primary_model_summary(oof: pd.DataFrame, representation: str, output_dir: Path) -> dict[str, Any]:
@@ -1637,6 +1908,29 @@ def direct_onset_lineage(
             "src.onset_koopman:alarm_event_rows",
             ("first_eligible_alert", "refractory_alarm_episodes", "alarm_burden"),
         )
+    robustness_oof = node(
+        "robustness_oof.csv",
+        {
+            "features.csv": features,
+            "folds.csv": folds,
+            selections["C0"]["artifact"]: selections["C0"],
+            selections["C3"]["artifact"]: selections["C3"],
+            oofs["C0"]["artifact"]: oofs["C0"],
+            oofs["C3"]["artifact"]: oofs["C3"],
+        },
+        "src.scientific_pipeline:primary_outer_oof",
+        ("prespecified_seed_stability", "prespecified_balance_sensitivity"),
+    )
+    robustness_report = node(
+        "robustness_summary.csv", {"robustness_oof.csv": robustness_oof},
+        "src.scientific_pipeline:robustness_summary",
+        ("all_configurations_reported_without_winner_selection",),
+    )
+    robustness_differences = node(
+        "robustness_differences.csv", {"robustness_oof.csv": robustness_oof},
+        "src.scientific_pipeline:robustness_summary",
+        ("C3_minus_C0_seed_and_balance_sensitivity",),
+    )
     transport_selection = node(
         "transport_inner_selection.csv",
         {"features.csv": features, "model_runtime_manifest.json": model_runtime},
@@ -1668,6 +1962,22 @@ def direct_onset_lineage(
         "metrics.json", {name["artifact"]: name for name in reports.values()},
         "src.scientific_pipeline:finalize_direct_onset_stage",
         ("current_run_C0_to_C3_metrics",),
+    )
+    ablation = node(
+        "ablation_summary.csv",
+        {"metrics.json": metrics},
+        "src.scientific_pipeline:representation_ablation_summary",
+        ("C0_C1_C2_C3_representation_ablation",),
+    )
+    master_results = node(
+        "master_results.csv",
+        {
+            "metrics.json": metrics,
+            "transport.csv": transport,
+            "robustness_summary.csv": robustness_report,
+        },
+        "src.scientific_pipeline:master_result_table",
+        ("all_executed_current_run_results", "no_historical_values"),
     )
     gate = node(
         "scientific_gate_status.json",
@@ -1701,6 +2011,11 @@ def direct_onset_lineage(
         "dca": dca,
         "reliability": reliability,
         "alarm_events": alarm_events,
+        "robustness_oof": robustness_oof,
+        "robustness_summary": robustness_report,
+        "robustness_differences": robustness_differences,
+        "representation_ablation": ablation,
+        "master_results": master_results,
         "transport_inner_selection": transport_selection,
         "transport": transport,
         "paired_inference": inference,
@@ -1805,11 +2120,17 @@ def model_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str
     features = pd.read_csv(run_dir / "features.csv").sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
     folds = pd.read_csv(run_dir / "folds.csv")
     artifacts = ["model_runtime_manifest.json"]
+    robustness_frames = {}
     for representation in onset.REPRESENTATIONS:
-        _, detail = primary_outer_oof(features, folds, representation, run_dir, gpu)
+        oof, detail = primary_outer_oof(features, folds, representation, run_dir, gpu)
+        if representation in ROBUSTNESS_POLICY["representations"]:
+            robustness_frames[representation] = detail["robustness_oof"]
         artifacts.extend([
             detail["oof_artifact"], detail["selection_artifact"], detail["inner_selection_artifact"],
         ])
+    robustness = combine_robustness_oof(robustness_frames)
+    atomic_csv(robustness, run_dir / "robustness_oof.csv")
+    artifacts.append("robustness_oof.csv")
     transport_runs = [
         fit_primary_source_transport(features, representation, train_source, test_source, gpu)
         for representation in onset.REPRESENTATIONS
@@ -1825,7 +2146,11 @@ def model_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str
         run_dir,
         "model",
         artifacts,
-        {"run_id": run_id, "representations": list(onset.REPRESENTATIONS)},
+        {
+            "run_id": run_id,
+            "representations": list(onset.REPRESENTATIONS),
+            "robustness_policy": ROBUSTNESS_POLICY,
+        },
     )
 
 
@@ -1917,6 +2242,22 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
         ])
     atomic_json(run_dir / "metrics.json", summaries)
     artifacts.append("metrics.json")
+    atomic_csv(
+        representation_ablation_summary(summaries),
+        run_dir / "ablation_summary.csv",
+    )
+    robustness, robustness_differences = robustness_summary(
+        pd.read_csv(run_dir / "robustness_oof.csv")
+    )
+    atomic_csv(robustness, run_dir / "robustness_summary.csv")
+    atomic_csv(
+        robustness_differences, run_dir / "robustness_differences.csv"
+    )
+    artifacts.extend([
+        "ablation_summary.csv",
+        "robustness_summary.csv",
+        "robustness_differences.csv",
+    ])
     inference = onset.paired_patient_bootstrap(
         oofs["C0"], oofs["C3"], repeats=FEATURE_POLICY["paired_inference_repeats"], seed=SEED
     )
@@ -1929,6 +2270,11 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
     atomic_csv(dca_inference, run_dir / "dca_inference.csv")
     artifacts.append("dca_inference.csv")
     transport = pd.read_csv(run_dir / "transport.csv")
+    atomic_csv(
+        master_result_table(summaries, transport, robustness),
+        run_dir / "master_results.csv",
+    )
+    artifacts.append("master_results.csv")
     gate_status = _primary_gate_status(
         summaries,
         inference,
@@ -1953,7 +2299,11 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
                 "participants_and_data_sources": ["cohort_flow.json", "harmonized_manifest.json"],
                 "predictors": ["features_manifest.json", "C0_nested_selection.csv", "C3_nested_selection.csv"],
                 "outcome": ["runtime_manifest.json", "cohort_flow.json"],
-                "analysis": ["metrics.json", "inference.csv", "scientific_gate_status.json"],
+                "analysis": [
+                    "metrics.json", "inference.csv", "ablation_summary.csv",
+                    "robustness_summary.csv", "master_results.csv",
+                    "scientific_gate_status.json",
+                ],
                 "ai_specific_considerations": ["model_runtime_manifest.json", "resource_manifest.json"],
             }.items()
         },
@@ -2006,6 +2356,10 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or current.get("run_id") != manifest.get("runtime", {}).get("run_id")
         ):
             raise PipelineError(f"Manifest does not contain the current {stage} stage")
+    if stable_hash(_require_stage(run_dir, "model").get("robustness_policy")) != stable_hash(
+        ROBUSTNESS_POLICY
+    ):
+        raise PipelineError("Model stage robustness policy is not current")
     validate_artifact_hashes(run_dir, manifest["artifact_sha256"])
     runtime = manifest["runtime"]
     runtime_artifact = json.loads(
@@ -2017,6 +2371,7 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         or runtime.get("git_dirty") is not False
         or runtime.get("feature_policy_hash") != stable_hash(FEATURE_POLICY)
         or runtime.get("model_policy_hash") != stable_hash(MODEL_POLICY)
+        or runtime.get("robustness_policy_hash") != stable_hash(ROBUSTNESS_POLICY)
         or runtime.get("primary_target_policy_hash") != stable_hash(onset.TARGET_POLICY)
         or runtime.get("koopman_policy_hash") != stable_hash(onset.KOOPMAN_POLICY)
         or runtime.get("direct_onset_calibration_policy_hash") != stable_hash(onset.CALIBRATION_POLICY)
@@ -2094,8 +2449,10 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
     if set(metrics) != set(onset.REPRESENTATIONS):
         raise PipelineError("Combined metrics do not contain exactly C0--C3")
     identities = []
+    validated_oofs = {}
     for representation in onset.REPRESENTATIONS:
         oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
+        validated_oofs[representation] = oof
         if list(oof.columns) != PRIMARY_OOF_COLUMNS:
             raise PipelineError(f"{representation} OOF schema is invalid")
         identity = oof[PRIMARY_OOF_COLUMNS[:11]].sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
@@ -2232,6 +2589,76 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
                 raise PipelineError(f"{representation} alarm metric {name} is not traceable to OOF")
     if not all(identities[0].equals(identity) for identity in identities[1:]):
         raise PipelineError("C0--C3 OOF identities are not paired")
+    expected_ablation = representation_ablation_summary(metrics)
+    observed_ablation = pd.read_csv(run_dir / "ablation_summary.csv")
+    try:
+        pd.testing.assert_frame_equal(
+            observed_ablation, expected_ablation,
+            check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise PipelineError("Representation ablation table does not reproduce") from exc
+    robustness_oof = pd.read_csv(run_dir / "robustness_oof.csv")
+    required_robustness = ROBUSTNESS_IDENTITY_COLUMNS + [
+        robustness_probability_column(representation, seed, balance)
+        for representation in ROBUSTNESS_POLICY["representations"]
+        for seed, balance, _ in robustness_configurations()
+    ]
+    if (
+        list(robustness_oof.columns) != required_robustness
+        or robustness_oof.duplicated(["Patient_ID", "ICULOS"]).any()
+        or not np.isfinite(robustness_oof[required_robustness[5:]].to_numpy(
+            dtype=float
+        )).all()
+    ):
+        raise PipelineError("Robustness OOF schema or policy coverage is invalid")
+    expected_decisions = onset.primary_decisions(
+        validated_oofs[ROBUSTNESS_POLICY["representations"][0]]
+    )[ROBUSTNESS_IDENTITY_COLUMNS].sort_values(
+        ["Patient_ID", "ICULOS"], kind="mergesort"
+    ).reset_index(drop=True)
+    try:
+        pd.testing.assert_frame_equal(
+            robustness_oof[ROBUSTNESS_IDENTITY_COLUMNS],
+            expected_decisions,
+            check_dtype=False,
+        )
+    except AssertionError as exc:
+        raise PipelineError("Robustness OOF identity differs from primary OOF") from exc
+    primary_seed = ROBUSTNESS_POLICY["training_seed_bases"][0]
+    for representation in ROBUSTNESS_POLICY["representations"]:
+        primary_probability = onset.primary_decisions(
+            validated_oofs[representation]
+        ).sort_values(["Patient_ID", "ICULOS"], kind="mergesort")["prob_raw"]
+        observed_probability = robustness_oof[
+            robustness_probability_column(
+                representation, primary_seed, "equal_patient"
+            )
+        ]
+        if not np.allclose(
+            observed_probability.to_numpy(dtype=float),
+            primary_probability.to_numpy(dtype=float),
+            rtol=1e-7,
+            atol=1e-8,
+        ):
+            raise PipelineError("Primary robustness probabilities differ from primary OOF")
+    expected_robustness, expected_robustness_differences = robustness_summary(
+        robustness_oof
+    )
+    for name, expected_frame in (
+        ("robustness_summary.csv", expected_robustness),
+        ("robustness_differences.csv", expected_robustness_differences),
+    ):
+        observed = pd.read_csv(run_dir / name)
+        try:
+            pd.testing.assert_frame_equal(
+                observed, expected_frame,
+                check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
+            )
+        except AssertionError as exc:
+            raise PipelineError(f"{name} does not reproduce from robustness OOF") from exc
+        if not observed["configuration_selected"].eq(False).all():
+            raise PipelineError(f"{name} improperly selects a sensitivity configuration")
     transport = pd.read_csv(run_dir / "transport.csv")
     expected_transport = {
         (representation, f"train_{source}_test_{target}")
@@ -2329,6 +2756,17 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         for signals, counts in zip(transport_signals, transport_counts)
     ):
         raise PipelineError("Transport transition-count provenance is invalid")
+    expected_master = master_result_table(metrics, transport, expected_robustness)
+    observed_master = pd.read_csv(run_dir / "master_results.csv")
+    try:
+        pd.testing.assert_frame_equal(
+            observed_master, expected_master,
+            check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise PipelineError("Master result table does not reproduce") from exc
+    if not observed_master["configuration_selected"].eq(False).all():
+        raise PipelineError("Master result table improperly selects a sensitivity result")
     inference = pd.read_csv(run_dir / "inference.csv")
     expected_inference_metrics = {
         "patient_balanced_average_precision",
@@ -2457,11 +2895,21 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or len(profile_selection.get("profiles", [])) != 6
             or (
                 selected.get("gpus") == 0
-                and profile_selection.get("selected_profile_cpu_efficiency", 0) < 0.80
+                and profile_selection.get(
+                    "selected_profile_active_cpu_efficiency", 0
+                ) <= 0.50
             )
             or (
                 selected.get("gpus") == 1
-                and profile_selection.get("gpu_speedup_over_best_cpu", 0) <= 1.05
+                and (
+                    profile_selection.get("gpu_speedup_over_best_cpu", 0) <= 1.05
+                    or profile_selection.get(
+                        "selected_profile_active_gpu_utilization_percent", 0
+                    ) <= 50
+                    or profile_selection.get(
+                        "selected_profile_active_gpu_samples", 0
+                    ) < 3
+                )
             )
             or profile_selection.get("run_id") != runtime.get("run_id")
             or profile_selection.get("source_git_commit") != runtime.get("git_commit")
@@ -2472,9 +2920,9 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
                 for stage in stages.values()
             )
             or stages["model"].get("requested") != selected
-            or stages["prepare"].get("requested") != {"cpus": 2, "memory_gb": 24, "gpus": 0}
+            or stages["prepare"].get("requested") != {"cpus": 1, "memory_gb": 10, "gpus": 0}
             or stages["finalize"].get("requested") != {
-                "cpus": 2, "memory_gb": selected.get("memory_gb"), "gpus": 0,
+                "cpus": 1, "memory_gb": selected.get("memory_gb"), "gpus": 0,
             }
             or any(stage.get("run_id") != runtime.get("run_id") for stage in stages.values())
             or any(stage.get("source_git_commit") != runtime.get("git_commit") for stage in stages.values())

@@ -9,8 +9,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EXPECT: finding-ledger-verification-passed
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
-- [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26737 passed 59/59 tests in 12.880 s on compute-0-2 for exact commit dc445dc and source inventory 6c78ec9e; scheduler exit, resource record and append-only ledger all report PASS/COMPLETED.
+- [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
+  EVIDENCE: historical job 26808 passed 48/48 for commit 78dc8d7; the current v6 robustness/resource source requires a new clean committed CEDIA suite before this gate can close.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: job 26224 generated the complete artifact family but failed closed at final validation because pandas 1.5 returned `usecols` in file order; the preserved manifest remains PENDING_FINAL_VALIDATION. The user explicitly prohibited a replacement full run.
@@ -33,8 +33,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 - [ ] G8: the master result table includes every executed current model, calibration, transport, stability, subgroup, temporal, DCA, inference, and ablation result
   EVIDENCE: pending corrected rerun artifact inventory; no manuscript is in scope.
 
-- [x] G9: Methodology matches the final code and defines every implemented estimand, formula, parameter, edge case, and inferential unit; references are checked against original sources
-  EVIDENCE: docs/reproducibility.md and docs/reference_verification.md were traced against all active producers and the pinned official scorer; no manuscript text was drafted.
+- [ ] G9: Methodology matches the final code and defines every implemented estimand, formula, parameter, edge case, and inferential unit; references are checked against original sources
+  EVIDENCE: v6 adds prespecified seed/balance sensitivity and active-resource selection; final post-run code-to-method trace remains pending. No manuscript text is drafted.
 
 - [ ] G10: Results use only the final corrected rerun, distinguish non-executed/external-data limitations, and pass two complete traceability readings
   EVIDENCE: pending experimental reporting audit; no paper text will be drafted.
@@ -45,41 +45,45 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 
 ## Gates: direct-onset Koopman experiment
 
-- [x] G12: the primary target is exactly true onset in 1--6 hours, excludes onset/post-onset and left-censored patients, and excludes the final six control hours needed for complete follow-up
+- [ ] G12: the primary target is exactly true onset in 1--6 hours, excludes onset/post-onset and left-censored patients, and excludes the final six control hours needed for complete follow-up
   CHECK: python -m unittest tests.test_onset_koopman.OnsetTargetTests -v && printf 'G12_TARGET_ORACLES_PASS\n'
   EXPECT: G12_TARGET_ORACLES_PASS
-  EVIDENCE: job 26330 ran both OnsetTargetTests under PYTHONWARNINGS=error within the 58/58 passing suite.
+  EVIDENCE: historical oracle evidence exists; current v6 exact-commit CEDIA suite pending.
 
-- [x] G13: fold-local state, delta/slope, and Koopman transforms pass zero-residual, anomaly, sparse-support, fixed-schema, float32, and no-future oracles
+- [ ] G13: fold-local state, delta/slope, and Koopman transforms pass zero-residual, anomaly, sparse-support, fixed-schema, float32, and no-future oracles
   CHECK: python -m unittest tests.test_onset_koopman.KoopmanOracleTests -v && printf 'G13_KOOPMAN_ORACLES_PASS\n'
   EXPECT: G13_KOOPMAN_ORACLES_PASS
-  EVIDENCE: job 26330 ran all three KoopmanOracleTests under PYTHONWARNINGS=error within the 58/58 passing suite.
+  EVIDENCE: historical oracle evidence exists; current v6 exact-commit CEDIA suite pending.
 
-- [x] G14: C0--C3 model selection, representation fitting, calibration choice, and alarm threshold selection use inner-training/inner-OOF data only
+- [ ] G14: C0--C3 model selection, representation fitting, calibration choice, and alarm threshold selection use inner-training/inner-OOF data only
   CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests -v && printf 'G14_NESTED_POLICY_PASS\n'
   EXPECT: G14_NESTED_POLICY_PASS
-  EVIDENCE: job 26330 ran all three NestedPolicyTests, including provenance-tamper rejection, within the 58/58 passing suite.
+  EVIDENCE: inner held-out predictions now remove redundant refits and seed/balance sensitivities reuse only outer-train-selected settings; current v6 exact-commit CEDIA suite pending.
 
-- [x] G15: primary patient-balanced AP inference, six-hour alarm budget, lead time, DCA, and A-to-B/B-to-A transport are recomputable from current-run artifacts without destination labels
+- [ ] G15: primary patient-balanced AP inference, six-hour alarm budget, lead time, DCA, and A-to-B/B-to-A transport are recomputable from current-run artifacts without destination labels
   CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests -v && printf 'G15_INFERENCE_TRANSPORT_PASS\n'
   EXPECT: G15_INFERENCE_TRANSPORT_PASS
-  EVIDENCE: job 26330 ran all four InferenceTransportTests within the 58/58 passing suite.
+  EVIDENCE: historical oracle evidence exists; current v6 exact-commit CEDIA suite and final artifact recomputation pending.
 
-- [x] G16: run.sh remains the sole entrypoint, submits only compute-0-2 jobs, bounds CPU/RAM/GPU, records resource measurements, and links prepare/model/finalize fail-closed
+- [ ] G16: run.sh remains the sole entrypoint, submits only compute-0-2 jobs, bounds CPU/RAM/GPU, records resource measurements, and links prepare/model/finalize fail-closed
   CHECK: python -m unittest tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G16_RESOURCE_ORCHESTRATION_PASS\n'
   EXPECT: G16_RESOURCE_ORCHESTRATION_PASS
-  EVIDENCE: job 26737 ran the resource-orchestration tests plus the safe prepare-scaffold oracle; shell syntax checks passed locally and the allocated test job recorded compute-0-2, CPU partition, 2 CPU, 8 GiB and resource status PASS.
+  EVIDENCE: v6 changes login-node Python, active CPU/GPU eligibility, one-second GPU sampling, and measured prepare resources; current exact-commit CEDIA suite/profile pending.
 
-- [x] G17: the methodological plan records current evidence, reproducible searches, mathematics, rejected alternatives, IEEE references from 2021--2026, official-standard exceptions, and explicit Zahibi/Zabihi exclusion without modifying the paper
+- [ ] G17: the methodological plan records current evidence, reproducible searches, mathematics, rejected alternatives, IEEE references from 2021--2026, official-standard exceptions, and explicit Zahibi/Zabihi exclusion without modifying the paper
   CHECK: python -m unittest tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G17_METHODOLOGY_DOCUMENT_PASS\n'
   EXPECT: G17_METHODOLOGY_DOCUMENT_PASS
-  EVIDENCE: job 26330 passed MethodologyDocumentTests; no paper source is modified in the direct-onset commit range.
+  EVIDENCE: plan now includes reviewer-requested ablations, seeds, balance and resource policy; current exact-commit test plus final paper-file diff audit pending.
 
-- [x] G18: the complete accumulated local/container test suite and static gates pass from a clean committed checkout
-  EVIDENCE: exact committed source dc445dc/inventory 6c78ec9e passed 59/59 in job 26737; py_compile, both shell syntax checks and git diff --check also passed before synchronization.
+- [ ] G18: the complete accumulated local/container test suite and static gates pass from a clean committed checkout
+  EVIDENCE: local v6 static syntax/diff checks pass; clean committed CEDIA suite pending.
 
 - [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
   EVIDENCE: pending profiling through bash run.sh --profile.
 
 - [ ] G20: one clean bash run.sh execution completes prepare, model, and finalize; all hashes, OOF identities, nested provenance, resource manifests, and final scientific gates pass an independent audit
   EVIDENCE: pending final CEDIA run and independent audit; no PASS may be inferred from process exit alone.
+
+- [ ] G21: the 2026-09-21 reviewer recommendations are separated into executable evidence and manuscript-only actions without changing the paper
+  CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.MethodologyDocumentTests -v
+  EVIDENCE: C0--C3 ablation plus three seeds and three training-balance policies are implemented as non-selective sensitivity artifacts. Journal citations/title/Abstract/contributions/Discussion/Conclusion/future-work/special-issue alignment remain explicitly DEFERRED_TO_MANUSCRIPT_PHASE. Current exact-commit CEDIA suite and final artifacts pending.

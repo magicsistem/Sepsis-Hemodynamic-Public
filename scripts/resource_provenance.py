@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Record and select bounded Slurm resources using measured job evidence."""
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json
@@ -14,13 +12,16 @@ from pathlib import Path
 CPU_CAP = 32
 MEMORY_CAP_GB = 64
 GPU_CAP = 1
+MIN_ACTIVE_CPU_EFFICIENCY = 0.50
+MIN_ACTIVE_GPU_UTILIZATION_PERCENT = 50.0
+MIN_ACTIVE_GPU_SAMPLES = 3
 
 
 class ResourceError(RuntimeError):
     pass
 
 
-def atomic_json(path: Path, payload: dict) -> None:
+def atomic_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -30,7 +31,7 @@ def atomic_json(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path):
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
@@ -38,7 +39,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_stage(args: argparse.Namespace) -> dict:
+def verify_stage(args):
     manifest_path = args.run_dir / f"{args.stage}_stage_manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise ResourceError(f"Missing {args.stage} stage manifest")
@@ -66,7 +67,7 @@ def verify_stage(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "stage": args.stage, "artifact_count": len(payload["artifacts"])}
 
 
-def verify_profile(args: argparse.Namespace) -> dict:
+def verify_profile(args):
     path = args.profile_dir / f"{args.name}.json"
     benchmark_path = args.profile_dir / f"{args.name}-benchmark.json"
     if not path.is_file() or not benchmark_path.is_file():
@@ -90,7 +91,7 @@ def verify_profile(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "profile": args.name}
 
 
-def parse_time(path: Path) -> dict[str, float]:
+def parse_time(path):
     values = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if "=" not in line:
@@ -103,24 +104,36 @@ def parse_time(path: Path) -> dict[str, float]:
     return values
 
 
-def parse_gpu(path: Path | None) -> dict[str, float | int | None]:
+def parse_gpu(path):
     if path is None or not path.is_file() or not path.read_text(encoding="utf-8").strip():
-        return {"samples": 0, "mean_utilization_percent": None, "max_memory_used_mib": None, "memory_total_mib": None}
+        return {
+            "samples": 0,
+            "active_samples": 0,
+            "mean_utilization_percent": None,
+            "mean_active_utilization_percent": None,
+            "max_memory_used_mib": None,
+            "memory_total_mib": None,
+        }
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             rows.append(tuple(float(value.strip()) for value in line.split(",")))
         except ValueError as exc:
             raise ResourceError("Invalid nvidia-smi sample") from exc
+    active = [row for row in rows if row[0] > 0]
     return {
         "samples": len(rows),
+        "active_samples": len(active),
         "mean_utilization_percent": sum(row[0] for row in rows) / len(rows),
+        "mean_active_utilization_percent": (
+            sum(row[0] for row in active) / len(active) if active else 0.0
+        ),
         "max_memory_used_mib": max(row[1] for row in rows),
         "memory_total_mib": max(row[2] for row in rows),
     }
 
 
-def record_stage(args: argparse.Namespace) -> dict:
+def record_stage(args):
     timing = parse_time(args.time_file)
     cpus = args.cpus
     memory_gb = args.memory_gb
@@ -160,12 +173,12 @@ def record_stage(args: argparse.Namespace) -> dict:
     return payload
 
 
-def profile_key(payload: dict) -> tuple[int, int, int]:
+def profile_key(payload):
     requested = payload["requested"]
     return requested["gpus"], requested["cpus"], requested["memory_gb"]
 
 
-def select_profile(args: argparse.Namespace) -> dict:
+def select_profile(args):
     paths = [path for path in sorted(args.profile_dir.glob("*.json")) if not path.stem.endswith("-benchmark")]
     profiles = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     if len(profiles) != 6 or any(profile.get("status") != "PASS" for profile in profiles):
@@ -202,19 +215,44 @@ def select_profile(args: argparse.Namespace) -> dict:
     ):
         raise ResourceError("Benchmark profiles lack one valid source context")
 
-    def smallest_within_five(candidates: list[dict], require_cpu_efficiency: bool) -> dict:
-        if require_cpu_efficiency:
-            candidates = [profile for profile in candidates if profile["measured"]["cpu_efficiency"] >= 0.80]
+    def smallest_within_five(candidates, kind):
+        if kind == "cpu":
+            candidates = [
+                profile for profile in candidates
+                if profile["benchmark"].get("active_cpu_efficiency", 0)
+                > MIN_ACTIVE_CPU_EFFICIENCY
+            ]
             if not candidates:
-                raise ResourceError("No CPU profile reached the required 80% active utilization")
+                raise ResourceError("No CPU profile exceeded 50% utilization during active compute")
+        else:
+            candidates = [
+                profile for profile in candidates
+                if profile["measured"]["gpu"].get("active_samples", 0)
+                >= MIN_ACTIVE_GPU_SAMPLES
+                and profile["measured"]["gpu"].get(
+                    "mean_active_utilization_percent", 0
+                ) > MIN_ACTIVE_GPU_UTILIZATION_PERCENT
+            ]
+            if not candidates:
+                return None
         fastest = min(profile["measured"]["elapsed_seconds"] for profile in candidates)
         near = [profile for profile in candidates if profile["measured"]["elapsed_seconds"] <= fastest * 1.05]
         return min(near, key=profile_key)
 
-    best_cpu = smallest_within_five([profile for profile in profiles if profile["requested"]["gpus"] == 0], True)
-    best_gpu = smallest_within_five([profile for profile in profiles if profile["requested"]["gpus"] == 1], False)
-    gpu_speedup = best_cpu["measured"]["elapsed_seconds"] / best_gpu["measured"]["elapsed_seconds"]
-    selected = best_gpu if gpu_speedup > 1.05 else best_cpu
+    best_cpu = smallest_within_five(
+        [profile for profile in profiles if profile["requested"]["gpus"] == 0],
+        "cpu",
+    )
+    best_gpu = smallest_within_five(
+        [profile for profile in profiles if profile["requested"]["gpus"] == 1],
+        "gpu",
+    )
+    gpu_speedup = (
+        best_cpu["measured"]["elapsed_seconds"]
+        / best_gpu["measured"]["elapsed_seconds"]
+        if best_gpu is not None else None
+    )
+    selected = best_gpu if best_gpu is not None and gpu_speedup > 1.05 else best_cpu
     peak = max(
         float(selected["measured"]["max_rss_gb"]),
         float(selected.get("benchmark", {}).get("estimated_full_peak_gb", 0)),
@@ -224,7 +262,10 @@ def select_profile(args: argparse.Namespace) -> dict:
         raise ResourceError("Measured/estimated memory plus 20% exceeds the approved 64 GB cap")
     payload = {
         "status": "PASS",
-        "selection_rule": "smallest profile within 5% of fastest; GPU only when >5% faster than best CPU",
+        "selection_rule": (
+            "smallest profile within 5% of fastest; CPU active compute efficiency >50%; "
+            "GPU mean active utilization >50% with >=3 active samples and >5% speedup"
+        ),
         "selected": {
             "cpus": selected["requested"]["cpus"],
             "memory_gb": requested_memory,
@@ -233,8 +274,19 @@ def select_profile(args: argparse.Namespace) -> dict:
         "selected_profile_job_id": selected["slurm_job_id"],
         "selected_profile_elapsed_seconds": selected["measured"]["elapsed_seconds"],
         "selected_profile_cpu_efficiency": selected["measured"]["cpu_efficiency"],
+        "selected_profile_active_cpu_efficiency": selected["benchmark"].get(
+            "active_cpu_efficiency"
+        ),
+        "selected_profile_active_gpu_utilization_percent": selected["measured"][
+            "gpu"
+        ].get("mean_active_utilization_percent"),
+        "selected_profile_active_gpu_samples": selected["measured"]["gpu"].get(
+            "active_samples", 0
+        ),
         "best_cpu_elapsed_seconds": best_cpu["measured"]["elapsed_seconds"],
-        "best_gpu_elapsed_seconds": best_gpu["measured"]["elapsed_seconds"],
+        "best_gpu_elapsed_seconds": (
+            best_gpu["measured"]["elapsed_seconds"] if best_gpu is not None else None
+        ),
         "gpu_speedup_over_best_cpu": gpu_speedup,
         "memory_basis_peak_gb": peak,
         "memory_margin": 0.20,
@@ -247,7 +299,7 @@ def select_profile(args: argparse.Namespace) -> dict:
     return payload
 
 
-def aggregate(args: argparse.Namespace) -> dict:
+def aggregate(args):
     stages = {}
     for stage in ("prepare", "model", "finalize"):
         path = args.resources_dir / f"{stage}.json"
@@ -268,10 +320,10 @@ def aggregate(args: argparse.Namespace) -> dict:
     selected = profile.get("selected", {})
     stage_context = next(iter(stages.values()))
     if (
-        stages["prepare"]["requested"] != {"cpus": 2, "memory_gb": 24, "gpus": 0}
+        stages["prepare"]["requested"] != {"cpus": 1, "memory_gb": 10, "gpus": 0}
         or stages["model"]["requested"] != selected
         or stages["finalize"]["requested"] != {
-            "cpus": 2, "memory_gb": selected.get("memory_gb"), "gpus": 0,
+            "cpus": 1, "memory_gb": selected.get("memory_gb"), "gpus": 0,
         }
         or len({stage["run_id"] for stage in stages.values()}) != 1
         or len({stage["source_git_commit"] for stage in stages.values()}) != 1
@@ -292,9 +344,10 @@ def aggregate(args: argparse.Namespace) -> dict:
     return payload
 
 
-def parser() -> argparse.ArgumentParser:
+def parser():
     root = argparse.ArgumentParser()
-    commands = root.add_subparsers(dest="command", required=True)
+    commands = root.add_subparsers(dest="command")
+    commands.required = True  # Python 3.6 on the CEDIA login node.
     stage = commands.add_parser("stage")
     stage.add_argument("--stage", required=True)
     stage.add_argument("--time-file", type=Path, required=True)
@@ -335,7 +388,7 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
-def main() -> int:
+def main():
     args = parser().parse_args()
     try:
         commands = {

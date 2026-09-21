@@ -36,6 +36,12 @@ if [[ "${1:-}" == --inside-slurm ]]; then
     exit 0
 fi
 
+HOST_PYTHON=${HOST_PYTHON:-python3}
+command -v "$HOST_PYTHON" >/dev/null || {
+    echo "FAIL: Python 3 is required on the CEDIA login node" >&2
+    exit 1
+}
+
 MODE=full
 if [[ $# -eq 1 && "$1" == --tests ]]; then
     MODE=tests
@@ -53,10 +59,10 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     }
     SOURCE_GIT_COMMIT=$(git rev-parse HEAD)
     SOURCE_GIT_DIRTY=false
-    python scripts/source_provenance.py --write "$SOURCE_SIDECAR"
+    "$HOST_PYTHON" scripts/source_provenance.py --write "$SOURCE_SIDECAR"
 else
     [[ -f "$SOURCE_SIDECAR" ]] || { echo "FAIL: missing laptop source provenance sidecar" >&2; exit 1; }
-    python scripts/source_provenance.py --validate "$SOURCE_SIDECAR"
+    "$HOST_PYTHON" scripts/source_provenance.py --validate "$SOURCE_SIDECAR"
     SOURCE_GIT_COMMIT=$(sed -n 's/.*"git_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$SOURCE_SIDECAR")
     SOURCE_GIT_DIRTY=$(sed -n 's/.*"git_dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$SOURCE_SIDECAR")
 fi
@@ -118,26 +124,26 @@ TEST_SUFFIX=$([[ "$RESUMING" == true ]] && date -u +%Y%m%dT%H%M%SZ || printf ini
 TEST_RUN_DIR="$ROOT/runs/${RUN_ID}-tests-${TEST_SUFFIX}"
 [[ ! -e "$TEST_RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $TEST_RUN_DIR" >&2; exit 1; }
 if [[ "$MODE" == tests ]]; then
-    JOB_ID=$(submit_stage tests 2 8 0 "" "" "$TEST_RUN_DIR")
+    JOB_ID=$(submit_stage tests 1 2 0 "" "" "$TEST_RUN_DIR")
     wait_job "$JOB_ID"
     printf 'TEST_SUITE_PASS run_id=%s job_id=%s\n' "$RUN_ID" "$JOB_ID"
     exit 0
 fi
 
-TEST_JOB=$(submit_stage tests 2 8 0 "" "" "$TEST_RUN_DIR")
+TEST_JOB=$(submit_stage tests 1 2 0 "" "" "$TEST_RUN_DIR")
 wait_job "$TEST_JOB"
 PREVIOUS_JOB=$TEST_JOB
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     PREPARE_JOB=reused
 else
     [[ "$RESUMING" == false ]] || { echo "FAIL: incomplete/invalid prepare stage is preserved; use a fresh run ID" >&2; exit 1; }
-    PREPARE_JOB=$(submit_stage prepare 2 24 0 "$PREVIOUS_JOB")
+    PREPARE_JOB=$(submit_stage prepare 1 10 0 "$PREVIOUS_JOB")
     wait_job "$PREPARE_JOB"
     PREVIOUS_JOB=$PREPARE_JOB
 fi
 for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     IFS=: read -r name cpus gpus <<< "$spec"
-    if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+    if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
         PROFILE_JOB=reused
     else
         [[ "$RESUMING" == false || ( ! -e "$RUN_DIR/profiles/$name.json" && ! -e "$RUN_DIR/profiles/$name-benchmark.json" ) ]] || { echo "FAIL: invalid partial profile $name is preserved; use a fresh run ID" >&2; exit 1; }
@@ -146,19 +152,19 @@ for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
         PREVIOUS_JOB=$PROFILE_JOB
     fi
 done
-python scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
+"$HOST_PYTHON" scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
 if [[ "$MODE" == profile ]]; then
     printf 'RESOURCE_PROFILE_PASS run_id=%s selection=%s\n' "$RUN_ID" "$RUN_DIR/resource_profile_selection.json"
     exit 0
 fi
 
-read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS < <(python - "$RUN_DIR/resource_profile_selection.json" <<'PY'
+read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
 import json, sys
 selected = json.load(open(sys.argv[1], encoding="utf-8"))["selected"]
 print(selected["cpus"], selected["memory_gb"], selected["gpus"])
 PY
 )
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     MODEL_JOB=reused
 else
     if [[ "$RESUMING" == true ]] && compgen -G "$RUN_DIR/*_oof_predictions.csv" >/dev/null; then
@@ -169,20 +175,20 @@ else
     wait_job "$MODEL_JOB"
     PREVIOUS_JOB=$MODEL_JOB
 fi
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
-    RESULT_STATUS=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("computational_status", "missing"))' "$RUN_DIR/result_manifest.json")
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+    RESULT_STATUS=$("$HOST_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("computational_status", "missing"))' "$RUN_DIR/result_manifest.json")
     if [[ "$RESULT_STATUS" == COMPUTATIONAL_RUN_VALIDATED ]]; then
         printf 'SCIENTIFIC_RUN_ALREADY_VALIDATED run_id=%s run_dir=%s\n' "$RUN_ID" "$RUN_DIR"
         exit 0
     fi
     [[ "$RESULT_STATUS" == PENDING_RESOURCE_AND_FINAL_VALIDATION ]] || { echo "FAIL: finalized run has invalid result status $RESULT_STATUS" >&2; exit 1; }
-    FINALIZE_JOB=$(submit_stage promote 2 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage promote 1 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
 else
     if [[ "$RESUMING" == true ]] && [[ -e "$RUN_DIR/metrics.json" || -e "$RUN_DIR/result_manifest.json" ]]; then
         echo "FAIL: partial finalize artifacts are preserved; use a fresh run ID" >&2
         exit 1
     fi
-    FINALIZE_JOB=$(submit_stage finalize 2 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage finalize 1 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
 fi
 wait_job "$FINALIZE_JOB"
 printf 'SCIENTIFIC_RUN_PASS run_id=%s test_job=%s prepare_job=%s model_job=%s finalize_job=%s run_dir=%s\n' \

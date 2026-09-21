@@ -199,6 +199,55 @@ class NestedPolicyTests(unittest.TestCase):
         self.assertIn('fit_calibration_policy(inner_oof, "prob_raw")', source)
         self.assertIn('select_alarm_threshold(inner_oof, "prob_calibrated")', source)
         self.assertLess(source.index("select_inner_primary_model"), source.index("transformed_test"))
+        inner_source = inspect.getsource(pipeline.select_inner_primary_model)
+        self.assertEqual(inner_source.count("fit_xgb("), 1)
+        self.assertIn("candidate_probabilities[(winner_lift, winner_id)]", inner_source)
+
+    def test_seed_and_balance_sensitivities_report_every_configuration(self):
+        configurations = pipeline.robustness_configurations()
+        self.assertEqual(len(configurations), 5)
+        self.assertEqual(len(set(configurations)), 5)
+        self.assertEqual(
+            {seed for seed, balance, _ in configurations if balance == "equal_patient"},
+            set(pipeline.ROBUSTNESS_POLICY["training_seed_bases"]),
+        )
+        self.assertEqual(
+            {balance for seed, balance, _ in configurations if seed == pipeline.SEED},
+            set(pipeline.ROBUSTNESS_POLICY["balance_policies"]),
+        )
+        wide = pd.DataFrame({
+            "Patient_ID": ["A:p0", "B:p1"],
+            "SourceSet": ["A", "B"],
+            "ICULOS": [1, 1],
+            "Fold": [0, 1],
+            koopman.TARGET_COLUMN: [0, 1],
+        })
+        for representation in ("C0", "C3"):
+            for seed, balance, _ in configurations:
+                wide[pipeline.robustness_probability_column(
+                    representation, seed, balance
+                )] = [0.1, 0.9] if representation == "C3" else [0.5, 0.5]
+        summary, differences = pipeline.robustness_summary(wide)
+        self.assertEqual((len(summary), len(differences)), (10, 5))
+        self.assertFalse(summary["configuration_selected"].any())
+        self.assertFalse(differences["configuration_selected"].any())
+        self.assertTrue(
+            (differences["C3_minus_C0_patient_balanced_average_precision"] >= 0).all()
+        )
+        identity = pipeline.ROBUSTNESS_IDENTITY_COLUMNS
+        c0_columns = identity + [column for column in wide if "prob_raw__C0__" in column]
+        c3_columns = identity + [column for column in wide if "prob_raw__C3__" in column]
+        combined = pipeline.combine_robustness_oof({
+            "C0": wide[c0_columns], "C3": wide[c3_columns],
+        })
+        self.assertEqual(len(combined), 2)
+        self.assertEqual(list(combined.columns), list(wide.columns))
+        mismatched = wide[c3_columns].copy()
+        mismatched.loc[0, "ICULOS"] = 2
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.combine_robustness_oof({
+                "C0": wide[c0_columns], "C3": mismatched,
+            })
 
     def test_nested_provenance_rejects_transition_count_tampering(self):
         signals = ["HR"]
@@ -430,6 +479,9 @@ class InferenceTransportTests(unittest.TestCase):
             names.extend([
                 "transport.csv", "transport_inner_selection.csv", "inference.csv",
                 "dca_inference.csv", "metrics.json",
+                "robustness_oof.csv", "robustness_summary.csv",
+                "robustness_differences.csv", "ablation_summary.csv",
+                "master_results.csv",
                 "scientific_gate_status.json", "probast_ai_status.json",
             ])
             raw.write_bytes(b"raw")
@@ -437,7 +489,7 @@ class InferenceTransportTests(unittest.TestCase):
                 (run_dir / name).write_text(name, encoding="utf-8")
             runtime = {"git_commit": "a" * 40, "data_archive_path": str(raw)}
             lineage = pipeline.direct_onset_lineage(run_dir, runtime)
-            self.assertEqual(pipeline.validate_lineage_nodes(run_dir, lineage), 41)
+            self.assertEqual(pipeline.validate_lineage_nodes(run_dir, lineage), 46)
             (run_dir / "C3_oof_predictions.csv").write_text("tampered", encoding="utf-8")
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.validate_lineage_nodes(run_dir, lineage)
@@ -454,6 +506,18 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(resource_provenance.parse_time(path)["exit_status"], 1.0)
+
+    def test_gpu_profile_uses_active_one_second_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gpu.csv"
+            path.write_text(
+                "0, 10, 40960\n60, 1000, 40960\n80, 1200, 40960\n",
+                encoding="utf-8",
+            )
+            measured = resource_provenance.parse_gpu(path)
+            self.assertEqual((measured["samples"], measured["active_samples"]), (3, 2))
+            self.assertEqual(measured["mean_active_utilization_percent"], 70.0)
+            self.assertEqual(measured["max_memory_used_mib"], 1200.0)
 
     def test_profile_selection_caps_efficiency_and_memory_margin(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -477,8 +541,15 @@ class ResourceOrchestrationTests(unittest.TestCase):
                     "measured": {
                         "elapsed_seconds": elapsed, "cpu_efficiency": efficiency,
                         "max_rss_gb": 8.0,
+                        "gpu": {
+                            "active_samples": 5 if gpus else 0,
+                            "mean_active_utilization_percent": 80.0 if gpus else None,
+                        },
                     },
-                    "benchmark": {"status": "PASS", "estimated_full_peak_gb": 10.0},
+                    "benchmark": {
+                        "status": "PASS", "estimated_full_peak_gb": 10.0,
+                        "active_cpu_efficiency": efficiency,
+                    },
                 }
                 (root / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
             output = root / "selection.json"
@@ -487,6 +558,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 git_commit="a" * 40, source_inventory="b" * 64,
             ))
             self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 12, "gpus": 1})
+            self.assertEqual(selected["selected_profile_active_gpu_samples"], 5)
             self.assertLessEqual(selected["selected"]["cpus"], 32)
             self.assertLessEqual(selected["selected"]["memory_gb"], 64)
 
@@ -497,9 +569,9 @@ class ResourceOrchestrationTests(unittest.TestCase):
             resources.mkdir()
             selected = {"cpus": 8, "memory_gb": 12, "gpus": 1}
             requests = {
-                "prepare": {"cpus": 2, "memory_gb": 24, "gpus": 0},
+                "prepare": {"cpus": 1, "memory_gb": 10, "gpus": 0},
                 "model": selected,
-                "finalize": {"cpus": 2, "memory_gb": 12, "gpus": 0},
+                "finalize": {"cpus": 1, "memory_gb": 12, "gpus": 0},
             }
             for stage, requested in requests.items():
                 (resources / f"{stage}.json").write_text(json.dumps({
@@ -537,6 +609,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn('partition=gpu', entrypoint)
         self.assertIn("RESUME_RUN_ID", entrypoint)
         self.assertIn("verify-stage", entrypoint)
+        self.assertIn("HOST_PYTHON=${HOST_PYTHON:-python3}", entrypoint)
         self.assertIn("--nodelist=compute-0-2", job)
         self.assertNotIn("compute-0-1", job)
         self.assertIn("set -euo pipefail", entrypoint)
@@ -546,6 +619,8 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertEqual(resource_provenance.CPU_CAP, 32)
         self.assertEqual(resource_provenance.MEMORY_CAP_GB, 64)
         self.assertEqual(resource_provenance.GPU_CAP, 1)
+        self.assertEqual(resource_provenance.MIN_ACTIVE_CPU_EFFICIENCY, 0.50)
+        self.assertEqual(resource_provenance.MIN_ACTIVE_GPU_UTILIZATION_PERCENT, 50.0)
 
 
 class MethodologyDocumentTests(unittest.TestCase):
@@ -558,7 +633,8 @@ class MethodologyDocumentTests(unittest.TestCase):
             "Y_{i,t}", "C0", "C1", "C2", "C3", "Koopman", "EDMD",
             "nested", "A → B", "B → A", "BLOCKED_EXTERNAL_DATA",
             "Zahibi", "Zabihi", "IEEE", "2021–2026", "consulta reproducible",
-            "No es el manuscrito",
+            "No es el manuscrito", "Ablaciones, semillas y balance",
+            "DEFERRED_TO_MANUSCRIPT_PHASE", "4,000 pacientes", ">50 %",
         ):
             self.assertIn(required, text)
         self.assertNotIn("EXPECTED_AUROC", text)

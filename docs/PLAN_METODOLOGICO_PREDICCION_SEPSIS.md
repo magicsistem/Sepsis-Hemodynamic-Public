@@ -1,7 +1,8 @@
 # Plan metodológico de predicción de sepsis con innovaciones Koopman
 
 Estado: especificación computacional del experimento, no resultados finales.
-Fecha de verificación bibliográfica: 2026-09-17.
+Fecha de verificación bibliográfica: 2026-09-17. Revisión metodológica recibida:
+2026-09-21.
 
 > **No es el manuscrito.** Este documento fija el estimando, las comparaciones,
 > los gates y la ejecución reproducible. No redacta Abstract, Introduction,
@@ -152,6 +153,12 @@ Con inner OOF se elige entre identidad y recalibración logística sobre
 outer fold. Ningún outer outcome selecciona lift, hiperparámetro, árboles,
 calibrador o threshold.
 
+Las predicciones held-out producidas por el early stopping de cada inner fold se
+reutilizan para formar el inner OOF del candidato ganador. No se reentrena una
+segunda copia sobre los mismos inner folds: eso conserva la independencia y
+elimina fits redundantes. El número de árboles del outer fit sigue siendo la
+mediana preespecificada de las iteraciones inner.
+
 ## 8. Política de alarma
 
 - ventana útil: onset−6 h a onset−1 h;
@@ -180,6 +187,27 @@ Gates adicionales:
 Se reportan separadamente AP, AUROC, Brier, intercept/slope, ECE de 10 bins
 iguales, Utility oficial secundaria, episodios de alarma, lead time y net benefit.
 La unidad inferencial primaria es el paciente, no la fila horaria.
+
+### 9.1 Ablaciones, semillas y balance
+
+C0–C3 constituyen la ablación de representación y se publican juntas sin elegir
+post hoc la más favorable. Además, C0 y C3 se someten a dos sensibilidades
+preespecificadas que no modifican el gate primario:
+
+- bases de semilla `20260906`, `20261007` y `20261108`, manteniendo el esquema
+  outer y la configuración elegida exclusivamente en outer-train;
+- pesos `equal_patient`, `equal_row` y
+  `equal_patient_then_row_class`, manteniendo siempre evaluación AP/AUROC/Brier
+  con igual peso total por paciente.
+
+Para limitar compute y evitar un nuevo selection effect, estas sensibilidades
+reutilizan en cada outer fold el lift, hiperparámetro y número de árboles ya
+seleccionados nested en outer-train. Sólo reentrenan el modelo con la semilla o
+los pesos predeclarados. Se reportan todas las configuraciones en probabilidades
+raw como estabilidad de ranking; ninguna se calibra, selecciona ni reemplaza al
+resultado primario. El OOF de sensibilidad almacena una sola identidad horaria y
+diez columnas de probabilidad (`C0/C3 × cinco configuraciones`), evitando repetir
+identificadores y targets diez veces sin perder trazabilidad.
 
 ## 10. Transporte y escalamiento condicionado
 
@@ -219,7 +247,8 @@ registra el resultado negativo y no se añade una red mayor.
 
 1. suite completa;
 2. `prepare` CPU;
-3. benchmark fijo CPU 8/16/32 y GPU 8/16/32 cores; CEDIA exige al menos
+3. benchmark estratificado fijo de 4,000 pacientes y 200 árboles, CPU 8/16/32 y
+   GPU 8/16/32 cores; CEDIA exige al menos
    8 CPU para cualquier job de la partición GPU;
 4. `model` con el perfil seleccionado;
 5. `finalize` CPU;
@@ -227,13 +256,23 @@ registra el resultado negativo y no se añade una red mayor.
 
 Todo cálculo científico corre en `compute-0-2`; `compute-0-1` está excluido.
 Límites: 32 CPU, 64 GB y una A100 de 40 GB. Se selecciona el perfil menor dentro
-del 5 % del más rápido; GPU sólo con >5 % de ventaja total. CPU requiere ≥80 %
-de eficiencia activa. RAM es pico medido/estimado +20 %, redondeada a 2 GB. No
-se llena memoria artificialmente.
+del 5 % del más rápido; GPU sólo con >5 % de ventaja total, al menos tres muestras
+activas y utilización GPU activa media >50 %. CPU requiere eficiencia >50 %
+durante la ventana de cómputo, separada de I/O y startup. RAM es pico
+medido/estimado +20 %, redondeada a 2 GB; 64 GB es un techo, no un objetivo.
+`prepare` usa un CPU y 10 GB, derivados del pico observado más 20 %, porque más
+threads no aceleraron esa ruta serial. El muestreo GPU se hace cada segundo para
+no perder fits cortos. No se llena memoria artificialmente.
+
+Las recomendaciones sobre citas de la revista, título, Abstract, contribuciones,
+Discussion, Conclusion, trabajos futuros y special issues quedan
+`DEFERRED_TO_MANUSCRIPT_PHASE`; este experimento sólo produce la evidencia que
+permitirá atenderlas sin reescribir aún el paper.
 
 Cada artefacto final queda ligado por SHA-256 en la cadena raw → harmonized →
 features/target → folds → inner selection → OOF/model/calibration/threshold →
-inference/transport/DCA → gate/report. Un fallo no promueve resultados parciales.
+ablaciones/semillas/balance → inference/transport/DCA → gate/report. Un fallo no
+promueve resultados parciales.
 
 ## 13. Criterio de interpretación
 

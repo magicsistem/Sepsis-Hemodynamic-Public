@@ -377,6 +377,15 @@ class ScientificPipelineTests(unittest.TestCase):
         totals = pd.DataFrame({"Patient_ID": frame["Patient_ID"], "weight": model.kwargs["sample_weight"]}).groupby("Patient_ID")["weight"].sum()
         self.assertTrue(np.allclose(totals.to_numpy(), 1.0))
         self.assertTrue(np.allclose(model.kwargs["sample_weight_eval_set"][0], model.kwargs["sample_weight"]))
+        row_weights = pipeline.model_training_weights(frame, "SepsisLabel", "equal_row")
+        np.testing.assert_array_equal(row_weights, np.ones(3))
+        class_weights = pipeline.model_training_weights(
+            frame, "SepsisLabel", "equal_patient_then_row_class"
+        )
+        self.assertAlmostEqual(class_weights[frame["SepsisLabel"] == 0].sum(), 0.5)
+        self.assertAlmostEqual(class_weights[frame["SepsisLabel"] == 1].sum(), 0.5)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.model_training_weights(frame, "SepsisLabel", "unknown")
 
     def test_calibration_uncertainty_uses_patient_clusters(self):
         frame = pd.DataFrame([{"Patient_ID": f"A:p{patient:02d}", "SepsisLabel": patient % 2, "probability": 0.75 if patient % 2 else 0.25} for patient in range(20) for _ in range(1 + patient % 3)])
