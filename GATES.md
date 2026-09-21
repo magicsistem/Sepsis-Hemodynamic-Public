@@ -10,7 +10,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [x] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: job 26330 passed 58/58 tests in 12.011 s on compute-0-2 for exact commit a0c0355 and source inventory ef1f6955; scheduler exit, resource record and append-only ledger all report PASS/COMPLETED.
+  EVIDENCE: job 26737 passed 59/59 tests in 12.880 s on compute-0-2 for exact commit dc445dc and source inventory 6c78ec9e; scheduler exit, resource record and append-only ledger all report PASS/COMPLETED.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: job 26224 generated the complete artifact family but failed closed at final validation because pandas 1.5 returned `usecols` in file order; the preserved manifest remains PENDING_FINAL_VALIDATION. The user explicitly prohibited a replacement full run.
@@ -68,7 +68,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 - [x] G16: run.sh remains the sole entrypoint, submits only compute-0-2 jobs, bounds CPU/RAM/GPU, records resource measurements, and links prepare/model/finalize fail-closed
   CHECK: python -m unittest tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G16_RESOURCE_ORCHESTRATION_PASS\n'
   EXPECT: G16_RESOURCE_ORCHESTRATION_PASS
-  EVIDENCE: job 26330 ran all three ResourceOrchestrationTests; shell syntax checks passed locally and the allocated test job recorded compute-0-2, CPU partition, 2 CPU, 8 GiB and resource status PASS.
+  EVIDENCE: job 26737 ran the resource-orchestration tests plus the safe prepare-scaffold oracle; shell syntax checks passed locally and the allocated test job recorded compute-0-2, CPU partition, 2 CPU, 8 GiB and resource status PASS.
 
 - [x] G17: the methodological plan records current evidence, reproducible searches, mathematics, rejected alternatives, IEEE references from 2021--2026, official-standard exceptions, and explicit Zahibi/Zabihi exclusion without modifying the paper
   CHECK: python -m unittest tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G17_METHODOLOGY_DOCUMENT_PASS\n'
@@ -76,7 +76,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: job 26330 passed MethodologyDocumentTests; no paper source is modified in the direct-onset commit range.
 
 - [x] G18: the complete accumulated local/container test suite and static gates pass from a clean committed checkout
-  EVIDENCE: exact committed source a0c0355/inventory ef1f6955 passed 58/58 in job 26330; py_compile, both shell syntax checks and git diff --check also passed before synchronization.
+  EVIDENCE: exact committed source dc445dc/inventory 6c78ec9e passed 59/59 in job 26737; py_compile, both shell syntax checks and git diff --check also passed before synchronization.
 
 - [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
   EVIDENCE: pending profiling through bash run.sh --profile.
