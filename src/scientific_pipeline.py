@@ -2871,8 +2871,26 @@ def prepare_direct_onset_stage(root: Path, archive: Path, run_dir: Path, run_id:
     """Validate raw data and publish only harmonized/features/folds checkpoints."""
     require_python_hash_seed()
     if run_dir.exists():
-        raise PipelineError(f"Prepare refuses an existing run directory: {run_dir}")
-    run_dir.mkdir(parents=True)
+        job_id = os.environ.get("SLURM_JOB_ID", "")
+        allowed_directories = {Path("resources"), Path("profiles")}
+        allowed_files = {
+            Path("resources") / f"prepare-{job_id}.gpu.csv",
+            Path("resources") / f"prepare-{job_id}.time",
+        } if job_id else set()
+        unsafe = []
+        for path in run_dir.rglob("*"):
+            relative = path.relative_to(run_dir)
+            if (
+                path.is_symlink()
+                or (path.is_dir() and relative not in allowed_directories)
+                or (not path.is_dir() and relative not in allowed_files)
+            ):
+                unsafe.append(str(relative))
+        if unsafe:
+            raise PipelineError(
+                f"Prepare refuses unsafe existing run content: {sorted(unsafe)}"
+            )
+    run_dir.mkdir(parents=True, exist_ok=True)
     runtime = runtime_manifest(root, run_id, sys.argv, archive)
     if runtime["git_dirty"]:
         raise PipelineError("Scientific runs require a clean committed checkout")

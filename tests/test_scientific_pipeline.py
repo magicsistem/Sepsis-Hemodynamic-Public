@@ -701,6 +701,30 @@ class ScientificPipelineTests(unittest.TestCase):
         changed = dict(context, model_policy_hash="different")
         self.assertNotEqual(pipeline.runtime_resume_context(context), pipeline.runtime_resume_context(changed))
 
+    def test_prepare_accepts_only_current_wrapper_resource_scaffold(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {"PYTHONHASHSEED": str(pipeline.SEED), "SLURM_JOB_ID": "42"},
+        ):
+            root = Path(directory)
+            safe = root / "safe"
+            (safe / "resources").mkdir(parents=True)
+            (safe / "profiles").mkdir()
+            (safe / "resources" / "prepare-42.gpu.csv").touch()
+            (safe / "resources" / "prepare-42.time").touch()
+            with mock.patch.object(
+                pipeline,
+                "runtime_manifest",
+                side_effect=pipeline.PipelineError("safe scaffold reached runtime"),
+            ), self.assertRaisesRegex(pipeline.PipelineError, "safe scaffold reached runtime"):
+                pipeline.prepare_direct_onset_stage(root, root / "archive.zip", safe, "run")
+
+            unsafe = root / "unsafe"
+            (unsafe / "resources").mkdir(parents=True)
+            (unsafe / "features.csv").write_text("stale\n", encoding="utf-8")
+            with self.assertRaisesRegex(pipeline.PipelineError, "unsafe existing run content"):
+                pipeline.prepare_direct_onset_stage(root, root / "archive.zip", unsafe, "run")
+
     def test_cache_context_and_manifest_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             existing = Path(directory) / "existing-run"
