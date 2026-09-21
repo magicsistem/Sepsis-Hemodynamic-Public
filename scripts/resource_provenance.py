@@ -23,7 +23,10 @@ class ResourceError(RuntimeError):
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     temporary.replace(path)
 
 
@@ -37,7 +40,7 @@ def sha256_file(path: Path) -> str:
 
 def verify_stage(args: argparse.Namespace) -> dict:
     manifest_path = args.run_dir / f"{args.stage}_stage_manifest.json"
-    if not manifest_path.is_file():
+    if manifest_path.is_symlink() or not manifest_path.is_file():
         raise ResourceError(f"Missing {args.stage} stage manifest")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if payload.get("stage") != args.stage or payload.get("status") != "PASS":
@@ -54,7 +57,9 @@ def verify_stage(args: argparse.Namespace) -> dict:
         raise ResourceError("Resume runtime manifest is missing")
     runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     if (
-        runtime.get("git_commit") != args.git_commit
+        payload.get("run_id") != args.run_id
+        or runtime.get("run_id") != args.run_id
+        or runtime.get("git_commit") != args.git_commit
         or runtime.get("source_inventory_sha256") != args.source_inventory
     ):
         raise ResourceError("Resume source context differs from the prepared run")
@@ -75,6 +80,9 @@ def verify_profile(args: argparse.Namespace) -> dict:
         or payload.get("hostname") != "compute-0-2"
         or payload.get("partition") != expected_partition
         or payload.get("requested") != expected
+        or payload.get("source_git_commit") != args.git_commit
+        or payload.get("source_inventory_sha256") != args.source_inventory
+        or payload.get("run_id") != args.run_id
         or payload.get("benchmark") != benchmark
         or benchmark.get("status") != "PASS"
     ):
@@ -128,6 +136,9 @@ def record_stage(args: argparse.Namespace) -> dict:
         "hostname": args.hostname,
         "partition": args.partition,
         "slurm_job_id": args.job_id,
+        "run_id": os.environ.get("RUN_ID", "unset"),
+        "source_git_commit": os.environ.get("SOURCE_GIT_COMMIT", "unset"),
+        "source_inventory_sha256": os.environ.get("SOURCE_INVENTORY_SHA256", "unset"),
         "requested": {"cpus": cpus, "memory_gb": memory_gb, "gpus": gpus},
         "measured": {
             **timing,
@@ -160,8 +171,36 @@ def select_profile(args: argparse.Namespace) -> dict:
     if len(profiles) != 6 or any(profile.get("status") != "PASS" for profile in profiles):
         raise ResourceError("All six CPU/GPU benchmark profiles must pass")
     expected = {(gpus, cpu) for gpus in (0, 1) for cpu in (8, 16, 32)}
-    if {(profile["requested"]["gpus"], profile["requested"]["cpus"]) for profile in profiles} != expected:
+    contexts = {
+        (
+            profile.get("run_id"),
+            profile.get("source_git_commit"),
+            profile.get("source_inventory_sha256"),
+        )
+        for profile in profiles
+    }
+    if (
+        {(profile["requested"]["gpus"], profile["requested"]["cpus"]) for profile in profiles} != expected
+        or any(
+            profile.get("hostname") != "compute-0-2"
+            or profile.get("partition") != ("gpu" if profile["requested"]["gpus"] else "cpu")
+            or profile["requested"].get("memory_gb") != 32
+            or profile.get("benchmark", {}).get("status") != "PASS"
+            for profile in profiles
+        )
+        or len(contexts) != 1
+    ):
         raise ResourceError("Benchmark profile grid is incomplete")
+    run_id, source_git_commit, source_inventory = contexts.pop()
+    if (
+        not isinstance(run_id, str) or not run_id or run_id == "unset"
+        or not isinstance(source_git_commit, str) or len(source_git_commit) != 40
+        or not isinstance(source_inventory, str) or len(source_inventory) != 64
+        or run_id != args.run_id
+        or source_git_commit != args.git_commit
+        or source_inventory != args.source_inventory
+    ):
+        raise ResourceError("Benchmark profiles lack one valid source context")
 
     def smallest_within_five(candidates: list[dict], require_cpu_efficiency: bool) -> dict:
         if require_cpu_efficiency:
@@ -199,6 +238,9 @@ def select_profile(args: argparse.Namespace) -> dict:
         "gpu_speedup_over_best_cpu": gpu_speedup,
         "memory_basis_peak_gb": peak,
         "memory_margin": 0.20,
+        "run_id": run_id,
+        "source_git_commit": source_git_commit,
+        "source_inventory_sha256": source_inventory,
         "profiles": profiles,
     }
     atomic_json(args.output, payload)
@@ -223,6 +265,22 @@ def aggregate(args: argparse.Namespace) -> dict:
     profile = json.loads(args.profile_selection.read_text(encoding="utf-8"))
     if profile.get("status") != "PASS":
         raise ResourceError("Resource profile selection did not pass")
+    selected = profile.get("selected", {})
+    stage_context = next(iter(stages.values()))
+    if (
+        stages["prepare"]["requested"] != {"cpus": 2, "memory_gb": 24, "gpus": 0}
+        or stages["model"]["requested"] != selected
+        or stages["finalize"]["requested"] != {
+            "cpus": 2, "memory_gb": selected.get("memory_gb"), "gpus": 0,
+        }
+        or len({stage["run_id"] for stage in stages.values()}) != 1
+        or len({stage["source_git_commit"] for stage in stages.values()}) != 1
+        or len({stage["source_inventory_sha256"] for stage in stages.values()}) != 1
+        or profile.get("run_id") != stage_context.get("run_id")
+        or profile.get("source_git_commit") != stage_context.get("source_git_commit")
+        or profile.get("source_inventory_sha256") != stage_context.get("source_inventory_sha256")
+    ):
+        raise ResourceError("Stage resources do not match the selected profile and source context")
     payload = {
         "status": "PASS",
         "caps": {"maximum_cpus": CPU_CAP, "maximum_memory_gb": MEMORY_CAP_GB, "maximum_gpus": GPU_CAP},
@@ -252,6 +310,9 @@ def parser() -> argparse.ArgumentParser:
     selection = commands.add_parser("select-profile")
     selection.add_argument("--profile-dir", type=Path, required=True)
     selection.add_argument("--output", type=Path, required=True)
+    selection.add_argument("--run-id", required=True)
+    selection.add_argument("--git-commit", required=True)
+    selection.add_argument("--source-inventory", required=True)
     final = commands.add_parser("aggregate")
     final.add_argument("--resources-dir", type=Path, required=True)
     final.add_argument("--profile-selection", type=Path, required=True)
@@ -259,6 +320,7 @@ def parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify-stage")
     verify.add_argument("--run-dir", type=Path, required=True)
     verify.add_argument("--stage", choices=("prepare", "model", "finalize"), required=True)
+    verify.add_argument("--run-id", required=True)
     verify.add_argument("--git-commit", required=True)
     verify.add_argument("--source-inventory", required=True)
     profile = commands.add_parser("verify-profile")
@@ -267,6 +329,9 @@ def parser() -> argparse.ArgumentParser:
     profile.add_argument("--cpus", type=int, required=True)
     profile.add_argument("--memory-gb", type=int, required=True)
     profile.add_argument("--gpus", type=int, required=True)
+    profile.add_argument("--run-id", required=True)
+    profile.add_argument("--git-commit", required=True)
+    profile.add_argument("--source-inventory", required=True)
     return root
 
 

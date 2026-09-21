@@ -30,16 +30,11 @@ la variable objetivo se midió realmente; no se calcula contra forward-fill.
 
 ## 2. Evidencia reconstruida y su límite
 
-El run histórico 26224 produjo el paquete completo para la etiqueta persistente
-del Challenge, pero quedó `PENDING_FINAL_VALIDATION`. Sus 52 hashes y la identidad
-de 1,552,210 filas/40,336 pacientes pudieron recuperarse; no fue promovido. En
-ese paquete, `baseline + CV` tuvo Average Precision 0.1060139037503349. Ese valor:
-
-- corresponde a la etiqueta persistente desplazada, no al estimando primario de
-  este plan;
-- no es un objetivo, una tolerancia ni un expected de test;
-- sólo justifica usar `baseline + CV` como comparador C0;
-- será sustituido por métricas nuevas del run corregido.
+El run histórico 26224 produjo un paquete para la etiqueta persistente del
+Challenge, pero quedó `PENDING_FINAL_VALIDATION` y no fue promovido. Sus números
+no seleccionan modelos, comparadores, tolerancias ni expected de tests en este
+experimento. `baseline + CV` es C0 porque así lo fija el diseño actual; todas
+sus métricas se recalcularán para el nuevo estimando.
 
 El job 26224 reservó 8 CPU y 32 GB; duró 26:40:55, alcanzó 17.38 GB y consumió
 aproximadamente 1.58 cores promedio. El nuevo run debe perfilar antes de reservar
@@ -179,8 +174,8 @@ Gates adicionales:
 - falsas alarmas C3 ≤0.25/paciente-día;
 - sin deterioro de Brier respaldado por el IC pareado;
 - mediana de lead time C3 no inferior a C0;
-- al menos un threshold de DCA donde C3 sea favorable frente a C0, treat-all y
-  treat-none con límite inferior no negativo.
+- al menos un threshold de DCA donde el límite inferior pareado C3−C0 sea
+  positivo y el límite inferior de C3 no sea menor que treat-all ni treat-none.
 
 Se reportan separadamente AP, AUROC, Brier, intercept/slope, ECE de 10 bins
 iguales, Utility oficial secundaria, episodios de alarma, lead time y net benefit.

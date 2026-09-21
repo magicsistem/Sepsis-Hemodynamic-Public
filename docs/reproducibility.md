@@ -5,55 +5,70 @@ requires an exact sidecar-validated copy of a clean laptop commit, the pinned
 raw archive, Slurm, and the existing CEDIA container. `PYTHONHASHSEED=20260906`
 is exported before Python starts. No package installation or update occurs.
 
-Each run records UTC time, host, Git SHA and dirty state, the exact source
-inventory hash, command, archive and input-inventory hashes, schema, feature
-and model policy hashes, fold hash, seed,
-dependency versions, GPU runtime validation, official Utility source hash, and
-hashes for every scientific artifact. The lineage is:
+Each run records UTC time, host, Git SHA and dirty state, exact source inventory,
+command, archive and ZIP-inventory hashes, schema, feature/model/target/Koopman/
+calibration/alarm policy hashes, folds, seeds, dependency and CUDA versions,
+validated GPU state, the official Utility source hash, stage resources, and
+every scientific artifact hash. The lineage is:
 
 ```text
-raw archive -> harmonized PSV rows -> causal features -> patient folds
--> nested models/OOF scores -> nested outcome-specific sigmoid calibration/thresholds
--> metrics, event analysis, inference, transport, ablations, DCA -> manifest
+raw archive -> harmonized rows -> causal features and target -> patient folds
+-> fold-local representations and nested models/OOF scores
+-> nested calibration and alarm thresholds
+-> metrics, reliability, event analysis, paired inference, transport and DCA
+-> resource evidence -> validated manifest
 ```
 
 The archive loader accepts source-qualified patient PSV files only. It checks
-the official schema, required `Hct`, binary/persistent labels, source identity,
-unique patient/hour rows, and strictly increasing `ICULOS`. It fails closed on
-any violation.
+the official 40-predictor schema, required `Hct`, binary persistent labels,
+source identity, exact cohort counts, unique patient/hour rows, archive hash,
+and strictly increasing `ICULOS`. It fails closed on any violation.
 
-Features use raw observations for rolling variability and entropy; last
-observation has a 24-hour maximum age. SampEn is canonical `m=2`, `r=0.2 SD`;
-the `m` and `m+1` counts use the same `N-m` starting positions, fewer than four
-observations are undefined, and a zero `(m+1)` match is recorded explicitly.
-Shannon entropy uses non-negative count probabilities. Static
-predictors are not transformed. SourceSet is provenance only, never a model
-feature.
+The primary target is `Y(i,t)=1` exactly when reconstructed true onset is 1--6
+hours ahead. Onset/post-onset rows and left-censored onsets are ineligible.
+Controls require six complete future hours. The shifted persistent Challenge
+label is a separate secondary estimand used only with official Utility.
 
-The Challenge Utility evaluator is the unchanged official scorer, pinned in
-`vendor/physionet2019`. It evaluates the shifted persistent Challenge labels;
-it is never labelled a fixed-horizon outcome. Fixed early-warning events use
-the reconstructed onset and the policy-fixed useful window `[onset-12h,
-onset-1h]`. Only a negative-to-positive crossing opens an alarm episode;
-continuous persistence cannot become a later useful warning after the six-hour
-refractory interval. Alarm rates divide by actual observed decision rows, not
-the elapsed ICULOS span; useful, remote-false, late-pre-onset, post-onset, and
-left-censored-unclassifiable episodes remain separate categories.
+Features retain the 34 dynamic raw observations only as transform inputs,
+causal last observations with a 24-hour maximum age, variable-specific
+observation ages and missingness, current measurement count, the five static
+predictors, and six observed-sample 8 h CV descriptors. Static predictors are
+not transformed. SourceSet is provenance only. SampEn and Shannon remain
+independent mathematical oracles but are not production predictors.
 
-Reported discrimination includes AUROC, sklearn Average Precision, and
-trapezoidal PR-AUC as distinct estimands. Row-time calibration includes Brier,
-fixed equal-width 10-bin ECE, calibration-in-the-large with slope fixed at one,
-a joint intercept/slope fit, reliability rows, and patient-cluster bootstrap
-uncertainty. DCA evaluates assessment now for true reconstructed onset in the
-next six hours at observed pre-onset decision hours. Its probability is a
-separate sigmoid fit on eligible inner-OOF six-hour outcomes, then applied to
-the held-out outer fold; DCA uncertainty uses a patient-cluster bootstrap.
-Cluster-respecting paired patient permutation tests define the
-AUROC/AP/Brier family and use canonical Benjamini-Hochberg reverse cumulative
-minima; no bootstrap sign proportion is presented as a null test.
+C0 is baseline plus CV, C1 is the causal state, C2 adds observed deltas/slopes,
+and C3 adds fold-local identity/quadratic ridge EDMD/Koopman innovations plus
+8 h innovation-energy summaries. Signal support, median/IQR normalization,
+state fill, operator, XGBoost candidate/tree count, calibrator, and alarm
+threshold are learned only inside the relevant training partition. The outer
+fold never selects a feature policy, model, calibrator, or threshold.
 
-The hashed model policy records five outer folds, three inner folds, the two
-XGBoost candidates, Average Precision selection, the 600-tree early-stopping
-ceiling, 30-round patience, eight threads, and both unpenalized `lbfgs`
-sigmoid calibrators, plus the exact L2-logistic robustness settings. These are
-run configuration, not historical expected results.
+Only a negative-to-positive crossing opens an alarm episode. Persistent
+positivity does not rearm after the six-hour refractory period. Useful alarms
+fall in `[onset-6h, onset-1h]`; remote false, late pre-onset, post-onset,
+right-censored, and left-censored-unclassifiable episodes are separate. False
+burden divides by actual eligible decision rows. Thresholds maximize inner-OOF
+sensitivity under 0.25 false episodes per eligible patient-day.
+
+Primary discrimination reports patient-balanced AUROC and sklearn Average
+Precision. The generic oracle keeps trapezoidal PR-AUC distinct from AP.
+Calibration reports Brier, fixed equal-width 10-bin ECE, calibration-in-the-
+large, joint intercept/slope, reliability rows, and patient-cluster percentile
+intervals. C3-minus-C0 AP/Brier and net-benefit differences use paired patient
+cluster bootstraps. DCA evaluates action now for onset in 1--6 hours against
+C0, treat-all, and treat-none. No bootstrap sign proportion is called a formal
+null test.
+
+Challenge Utility delegates to the unchanged pinned official scorer. A/B
+transport fits every representation, model, calibrator, and threshold in the
+source cohort and evaluates once in the destination. It is public-source
+transport, not independent external validation.
+
+`run.sh` runs the complete suite, prepares validated data, benchmarks six
+feasible CPU/GPU profiles, selects the smallest profile within 5% of the
+fastest (GPU only when more than 5% faster), and links model/finalize jobs with
+`afterok`. The bounds are 32 CPU, 64 GB RAM, and one A100 40 GB. Every stage
+records measured CPU, RAM, GPU, run ID, commit, and source inventory. Promotion
+independently reconciles those records and all scientific products, rejects
+unlisted/tampered artifacts, and never turns successful execution alone into a
+scientific PASS.

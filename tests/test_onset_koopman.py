@@ -147,6 +147,18 @@ class KoopmanOracleTests(unittest.TestCase):
         self.assertEqual(delta.iloc[-1]["causal_delta__HR"], 994.0)
         self.assertEqual(delta.iloc[-1]["causal_slope__HR"], 994.0)
 
+    def test_previous_state_expires_values_older_than_policy(self):
+        frame = patient(
+            "A:stale", [1, 26, 27, 28], [0, 0, 0, 0], math.nan,
+            "nonseptic", [10.0, math.nan, 20.0, math.nan],
+        )
+        state, previous = koopman._previous_state(frame, ("HR",))
+        self.assertTrue(previous.tolist() == [False, True, True, True])
+        self.assertTrue(math.isnan(state[1, 0]))
+        self.assertEqual(state[1, 1], koopman.KOOPMAN_POLICY["maximum_observation_age_hours"])
+        self.assertTrue(math.isnan(state[2, 0]))
+        self.assertEqual((state[3, 0], state[3, 1]), (20.0, 1.0))
+
 
 def primary_oof() -> pd.DataFrame:
     frames = []
@@ -280,9 +292,6 @@ class NestedPolicyTests(unittest.TestCase):
             row[koopman.raw_column(signal)] = 1.0
         for signal in pipeline.HEMODYNAMIC_COLUMNS:
             row[f"{signal}_cv_8h"] = 0.0
-            row[f"{signal}_iqr_8h"] = 0.0
-            row[f"{signal}_sampen_24h"] = 0.0
-            row[f"{signal}_sampen_24h_zero_match"] = 0
         return pd.DataFrame([row])
 
 
@@ -304,20 +313,94 @@ class InferenceTransportTests(unittest.TestCase):
             comparator, candidate, repeats=20, seed=7
         )
         self.assertEqual({row["inference_unit"] for row in rows}, {"patient"})
-        self.assertGreater(
-            next(row for row in rows if row["metric"] == "patient_balanced_average_precision")["candidate_minus_comparator"],
-            0,
+        observed_difference = next(
+            row for row in rows if row["metric"] == "patient_balanced_average_precision"
+        )["candidate_minus_comparator"]
+        comparator_decisions = koopman.primary_decisions(comparator)
+        expected_difference = expected - pipeline.average_precision_score(
+            comparator_decisions[koopman.TARGET_COLUMN],
+            comparator_decisions["prob_calibrated"],
+            sample_weight=koopman.equal_patient_weights(comparator_decisions),
         )
+        self.assertAlmostEqual(observed_difference, expected_difference)
+        self.assertGreater(observed_difference, 0)
 
     def test_alarm_window_budget_and_dca(self):
         frame = primary_oof()
         alarm = koopman.alarm_metrics(frame, "prob_calibrated", 0.5)
         self.assertEqual(alarm["tp_patients"], 2)
+        self.assertEqual(alarm["fn_patients"], 0)
         self.assertEqual(alarm["false_alarm_episodes"], 0)
         self.assertEqual(alarm["useful_sensitivity"], 1.0)
+        events = pd.DataFrame(koopman.alarm_event_rows(frame, "prob_calibrated", 0.5))
+        self.assertEqual(len(events), 4)
+        self.assertEqual(events["tp_patient"].sum(), 2)
+        self.assertTrue(events.loc[events["tp_patient"] == 1, "first_eligible_alert_iculos"].notna().all())
+        self.assertEqual(events["post_onset_alarm_episodes"].sum(), 0)
+        post = frame.copy()
+        post["prob_calibrated"] = 0.0
+        post.loc[
+            (post["Patient_ID"].str.startswith("A:s"))
+            & (post["ICULOS"] >= post["TrueSepsisOnset_ICULOS"]),
+            "prob_calibrated",
+        ] = 1.0
+        post_alarm = koopman.alarm_metrics(post, "prob_calibrated", 0.5)
+        self.assertEqual(post_alarm["post_onset_alarm_episodes"], 2)
+        self.assertEqual((post_alarm["tp_patients"], post_alarm["fn_patients"]), (0, 2))
+        reliability = pd.DataFrame(koopman.primary_reliability_rows(
+            frame, "prob_calibrated", "C3", bins=10
+        ))
+        self.assertEqual(len(reliability), 10)
+        self.assertEqual(reliability["n_decision_hours"].sum(), len(koopman.primary_decisions(frame)))
+        self.assertAlmostEqual(reliability["patient_weight_mass"].sum(), 4.0)
+        decisions = koopman.primary_decisions(frame)
+        calibration = pipeline.calibration_metrics(
+            decisions[koopman.TARGET_COLUMN].to_numpy(dtype=int),
+            decisions["prob_calibrated"].to_numpy(dtype=float),
+            sample_weight=koopman.equal_patient_weights(decisions),
+        )
+        reliability_ece = sum(
+            row.patient_weight_mass / reliability["patient_weight_mass"].sum()
+            * abs(row.observed_frequency - row.mean_prediction)
+            for row in reliability.dropna(subset=["mean_prediction"]).itertuples()
+        )
+        self.assertAlmostEqual(reliability_ece, calibration["ece_fixed_10_bins"])
+        persistent = frame.copy()
+        persistent["prob_calibrated"] = 1.0
+        persistent_alarm = koopman.alarm_metrics(persistent, "prob_calibrated", 0.5)
+        self.assertEqual((persistent_alarm["tp_patients"], persistent_alarm["fn_patients"]), (0, 2))
+        self.assertEqual(persistent_alarm["false_alarm_episodes"], 4)
+        fast_alarm = koopman._alarm_metrics_for_threshold(
+            persistent, "prob_calibrated", 0.5
+        )
+        for name, value in persistent_alarm.items():
+            if isinstance(value, float):
+                self.assertTrue(np.isclose(value, fast_alarm[name], equal_nan=True))
+            else:
+                self.assertEqual(value, fast_alarm[name])
+        left = koopman.add_primary_target(patient(
+            "A:left", [1, 2], [1, 1], math.nan,
+            "septic_onset_left_censored", [0.0, 0.0],
+        ))
+        left["prob_calibrated"] = 1.0
+        left_alarm = koopman.alarm_metrics(
+            pd.concat([frame, left], ignore_index=True), "prob_calibrated", 0.5
+        )
+        self.assertEqual(left_alarm["left_censored_unclassified_alarm_episodes"], 1)
+        self.assertEqual(left_alarm["n_patients_with_predictions"], 5)
+        self.assertEqual(left_alarm["n_monitored_patients"], 4)
         dca = koopman.decision_curve(frame, "prob_calibrated", (0.25,), repeats=20, seed=9)
         self.assertEqual(dca[0]["uncertainty_unit"], "patient-cluster bootstrap")
         self.assertEqual(dca[0]["outcome_estimand"], "true onset in 1--6 hours")
+        comparator = frame.copy()
+        comparator["prob_calibrated"] = 0.5
+        paired_dca = koopman.paired_decision_curve_difference(
+            comparator, frame, (0.25,), repeats=20, seed=9
+        )
+        self.assertGreater(paired_dca[0]["C3_minus_C0_net_benefit"], 0)
+        self.assertEqual(
+            paired_dca[0]["uncertainty_unit"], "paired patient-cluster bootstrap"
+        )
 
     def test_transport_contract_never_fits_destination_labels(self):
         source = inspect.getsource(pipeline.fit_primary_source_transport)
@@ -330,7 +413,10 @@ class InferenceTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory)
             raw = run_dir / "archive.zip"
-            names = ["harmonized.csv", "features.csv", "folds.csv"]
+            names = [
+                "runtime_manifest.json", "harmonized.csv", "features.csv", "folds.csv",
+                "model_runtime_manifest.json",
+            ]
             for representation in koopman.REPRESENTATIONS:
                 names.extend([
                     f"{representation}_nested_selection.csv",
@@ -338,9 +424,12 @@ class InferenceTransportTests(unittest.TestCase):
                     f"{representation}_oof_predictions.csv",
                     f"{representation}_metrics.json",
                     f"{representation}_dca.csv",
+                    f"{representation}_reliability.csv",
+                    f"{representation}_alarm_events.csv",
                 ])
             names.extend([
-                "transport.csv", "inference.csv", "metrics.json",
+                "transport.csv", "transport_inner_selection.csv", "inference.csv",
+                "dca_inference.csv", "metrics.json",
                 "scientific_gate_status.json", "probast_ai_status.json",
             ])
             raw.write_bytes(b"raw")
@@ -348,7 +437,7 @@ class InferenceTransportTests(unittest.TestCase):
                 (run_dir / name).write_text(name, encoding="utf-8")
             runtime = {"git_commit": "a" * 40, "data_archive_path": str(raw)}
             lineage = pipeline.direct_onset_lineage(run_dir, runtime)
-            self.assertEqual(pipeline.validate_lineage_nodes(run_dir, lineage), 29)
+            self.assertEqual(pipeline.validate_lineage_nodes(run_dir, lineage), 41)
             (run_dir / "C3_oof_predictions.csv").write_text("tampered", encoding="utf-8")
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.validate_lineage_nodes(run_dir, lineage)
@@ -380,20 +469,61 @@ class ResourceOrchestrationTests(unittest.TestCase):
             for name, cpus, gpus, elapsed, efficiency in profiles:
                 payload = {
                     "stage": name, "status": "PASS", "hostname": "compute-0-2",
+                    "partition": "gpu" if gpus else "cpu",
                     "slurm_job_id": name,
+                    "run_id": "run", "source_git_commit": "a" * 40,
+                    "source_inventory_sha256": "b" * 64,
                     "requested": {"cpus": cpus, "memory_gb": 32, "gpus": gpus},
                     "measured": {
                         "elapsed_seconds": elapsed, "cpu_efficiency": efficiency,
                         "max_rss_gb": 8.0,
                     },
-                    "benchmark": {"estimated_full_peak_gb": 10.0},
+                    "benchmark": {"status": "PASS", "estimated_full_peak_gb": 10.0},
                 }
                 (root / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
             output = root / "selection.json"
-            selected = resource_provenance.select_profile(Namespace(profile_dir=root, output=output))
+            selected = resource_provenance.select_profile(Namespace(
+                profile_dir=root, output=output, run_id="run",
+                git_commit="a" * 40, source_inventory="b" * 64,
+            ))
             self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 12, "gpus": 1})
             self.assertLessEqual(selected["selected"]["cpus"], 32)
             self.assertLessEqual(selected["selected"]["memory_gb"], 64)
+
+    def test_resource_aggregate_binds_selected_profile_and_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            resources = root / "resources"
+            resources.mkdir()
+            selected = {"cpus": 8, "memory_gb": 12, "gpus": 1}
+            requests = {
+                "prepare": {"cpus": 2, "memory_gb": 24, "gpus": 0},
+                "model": selected,
+                "finalize": {"cpus": 2, "memory_gb": 12, "gpus": 0},
+            }
+            for stage, requested in requests.items():
+                (resources / f"{stage}.json").write_text(json.dumps({
+                    "stage": stage, "status": "PASS", "hostname": "compute-0-2",
+                    "partition": "gpu" if requested["gpus"] else "cpu",
+                    "requested": requested, "run_id": "run", "source_git_commit": "a" * 40,
+                    "source_inventory_sha256": "b" * 64,
+                }), encoding="utf-8")
+            selection = root / "selection.json"
+            selection.write_text(json.dumps({
+                "status": "PASS", "selected": selected, "run_id": "run",
+                "source_git_commit": "a" * 40,
+                "source_inventory_sha256": "b" * 64,
+            }), encoding="utf-8")
+            args = Namespace(
+                resources_dir=resources, profile_selection=selection,
+                output=root / "resource_manifest.json",
+            )
+            self.assertEqual(resource_provenance.aggregate(args)["status"], "PASS")
+            model = json.loads((resources / "model.json").read_text(encoding="utf-8"))
+            model["requested"]["cpus"] = 16
+            (resources / "model.json").write_text(json.dumps(model), encoding="utf-8")
+            with self.assertRaises(resource_provenance.ResourceError):
+                resource_provenance.aggregate(args)
 
     def test_one_entrypoint_compute_node_and_fail_closed_dependencies(self):
         root = Path(__file__).resolve().parents[1]

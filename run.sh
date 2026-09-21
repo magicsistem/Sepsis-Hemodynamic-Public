@@ -127,7 +127,7 @@ fi
 TEST_JOB=$(submit_stage tests 2 8 0 "" "" "$TEST_RUN_DIR")
 wait_job "$TEST_JOB"
 PREVIOUS_JOB=$TEST_JOB
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     PREPARE_JOB=reused
 else
     [[ "$RESUMING" == false ]] || { echo "FAIL: incomplete/invalid prepare stage is preserved; use a fresh run ID" >&2; exit 1; }
@@ -137,7 +137,7 @@ else
 fi
 for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     IFS=: read -r name cpus gpus <<< "$spec"
-    if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" >/dev/null; then
+    if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
         PROFILE_JOB=reused
     else
         [[ "$RESUMING" == false || ( ! -e "$RUN_DIR/profiles/$name.json" && ! -e "$RUN_DIR/profiles/$name-benchmark.json" ) ]] || { echo "FAIL: invalid partial profile $name is preserved; use a fresh run ID" >&2; exit 1; }
@@ -146,7 +146,7 @@ for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
         PREVIOUS_JOB=$PROFILE_JOB
     fi
 done
-python scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json"
+python scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
 if [[ "$MODE" == profile ]]; then
     printf 'RESOURCE_PROFILE_PASS run_id=%s selection=%s\n' "$RUN_ID" "$RUN_DIR/resource_profile_selection.json"
     exit 0
@@ -158,7 +158,7 @@ selected = json.load(open(sys.argv[1], encoding="utf-8"))["selected"]
 print(selected["cpus"], selected["memory_gb"], selected["gpus"])
 PY
 )
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     MODEL_JOB=reused
 else
     if [[ "$RESUMING" == true ]] && compgen -G "$RUN_DIR/*_oof_predictions.csv" >/dev/null; then
@@ -169,7 +169,7 @@ else
     wait_job "$MODEL_JOB"
     PREVIOUS_JOB=$MODEL_JOB
 fi
-if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && python scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     RESULT_STATUS=$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("computational_status", "missing"))' "$RUN_DIR/result_manifest.json")
     if [[ "$RESULT_STATUS" == COMPUTATIONAL_RUN_VALIDATED ]]; then
         printf 'SCIENTIFIC_RUN_ALREADY_VALIDATED run_id=%s run_dir=%s\n' "$RUN_ID" "$RUN_DIR"

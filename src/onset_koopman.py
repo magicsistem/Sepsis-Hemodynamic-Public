@@ -196,7 +196,9 @@ def _previous_state(frame: pd.DataFrame, signals: tuple[str, ...]) -> tuple[np.n
         raw = pd.to_numeric(frame[raw_column(signal)], errors="coerce")
         last = raw.groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
         observed_at = times.where(raw.notna()).groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
-        age = (times - observed_at).clip(lower=0, upper=KOOPMAN_POLICY["maximum_observation_age_hours"])
+        age = times - observed_at
+        last = last.where(age <= KOOPMAN_POLICY["maximum_observation_age_hours"])
+        age = age.clip(lower=0, upper=KOOPMAN_POLICY["maximum_observation_age_hours"])
         state_parts.extend([last.to_numpy(dtype=float), age.to_numpy(dtype=float)])
     state = np.column_stack(state_parts) if state_parts else np.empty((len(frame), 0), dtype=float)
     return state, previous_exists.to_numpy(dtype=bool)
@@ -517,21 +519,27 @@ def apply_calibration(fitted: CalibrationFit, probability: Any) -> np.ndarray:
     return fitted.model.predict_proba(_logit(values).reshape(-1, 1))[:, 1]
 
 
-def alarm_metrics(
+def alarm_event_rows(
     frame: pd.DataFrame,
     probability_column: str,
     threshold: float | str,
     refractory_hours: int = ALARM_POLICY["refractory_hours"],
-) -> dict[str, float | int]:
-    decisions = primary_decisions(frame).sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
+) -> list[dict[str, Any]]:
+    """Return one auditable alarm-policy row per monitored patient."""
+    if {TARGET_COLUMN, ELIGIBLE_COLUMN}.difference(frame.columns):
+        frame = add_primary_target(frame)
+    timeline = frame.sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
     if (
         (not isinstance(threshold, str) and not 0 <= float(threshold) <= 1)
         or refractory_hours < 1
     ):
         raise OnsetKoopmanError("Invalid alarm policy")
-    useful_patients = eligible_septic = false_episodes = total_episodes = 0
-    lead_times: list[float] = []
-    for _, patient in decisions.groupby("Patient_ID", sort=False):
+    rows: list[dict[str, Any]] = []
+    for patient_id, patient in timeline.groupby("Patient_ID", sort=False):
+        eligible = patient[ELIGIBLE_COLUMN].to_numpy(dtype=int) == 1
+        statuses = patient["OnsetReconstructionStatus"].dropna().unique()
+        if len(statuses) != 1:
+            raise OnsetKoopmanError(f"{patient_id} has inconsistent alarm onset provenance")
         probability = _finite_numeric(patient[probability_column], "Alarm probability")
         if ((probability < 0) | (probability > 1)).any():
             raise OnsetKoopmanError("Alarm probabilities must lie in [0,1]")
@@ -552,29 +560,170 @@ def alarm_metrics(
             if is_positive and not previous_positive and (not episodes or time - episodes[-1] >= refractory_hours):
                 episodes.append(float(time))
             previous_positive = bool(is_positive)
-        total_episodes += len(episodes)
         onset = pd.to_numeric(patient["TrueSepsisOnset_ICULOS"], errors="coerce").dropna().unique()
+        useful: list[float] = []
+        false_episodes: list[float] = []
+        post_onset: list[float] = []
+        late_pre_onset: list[float] = []
+        right_censored: list[float] = []
+        left_censored_unclassified: list[float] = []
         if len(onset):
-            eligible_septic += 1
             minimum, maximum = ALARM_POLICY["useful_window_hours_before_onset"]
             useful = [time for time in episodes if float(onset[0]) - maximum <= time <= float(onset[0]) - minimum]
-            remote = [time for time in episodes if time < float(onset[0]) - maximum]
-            false_episodes += len(remote)
-            if useful:
-                useful_patients += 1
-                lead_times.append(float(onset[0]) - useful[0])
+            false_episodes = [time for time in episodes if time < float(onset[0]) - maximum]
+            late_pre_onset = [time for time in episodes if float(onset[0]) - minimum < time < float(onset[0])]
+            post_onset = [time for time in episodes if time >= float(onset[0])]
+        elif statuses[0] == "septic_onset_left_censored":
+            left_censored_unclassified = episodes
+        elif statuses[0] == "nonseptic":
+            eligible_times = set(times[eligible])
+            false_episodes = [time for time in episodes if time in eligible_times]
+            right_censored = [time for time in episodes if time not in eligible_times]
         else:
-            false_episodes += len(episodes)
-    patient_days = len(decisions) / 24
+            raise OnsetKoopmanError(f"{patient_id} has unsupported alarm onset provenance")
+        if len(episodes) != sum(map(len, (
+            useful, false_episodes, late_pre_onset, post_onset,
+            right_censored, left_censored_unclassified,
+        ))):
+            raise OnsetKoopmanError(f"{patient_id} alarm episodes are not exhaustively classified")
+        rows.append({
+            "Patient_ID": str(patient_id),
+            "primary_monitoring_eligible": int(eligible.any()),
+            "n_decision_hours": int(eligible.sum()),
+            "monitoring_patient_days": float(eligible.sum() / 24),
+            "onset_eligible_septic": int(bool(len(onset))),
+            "nested_alarm_threshold": patient_threshold,
+            "n_alarm_episodes": int(len(episodes)),
+            "first_alert_iculos": episodes[0] if episodes else math.nan,
+            "first_eligible_alert_iculos": useful[0] if useful else math.nan,
+            "first_eligible_lead_time_hours": float(onset[0]) - useful[0] if useful else math.nan,
+            "tp_patient": int(bool(useful)),
+            "fn_patient": int(bool(len(onset)) and not useful),
+            "false_alarm_episodes": int(len(false_episodes)),
+            "repeated_alarm_episodes": int(max(0, len(episodes) - 1)),
+            "late_pre_onset_alarm_episodes": int(len(late_pre_onset)),
+            "post_onset_alarm_episodes": int(len(post_onset)),
+            "right_censored_alarm_episodes": int(len(right_censored)),
+            "left_censored_unclassified_alarm_episodes": int(len(left_censored_unclassified)),
+            "alarm_episode_times_iculos": ";".join(format(value, ".15g") for value in episodes),
+            "useful_alarm_episode_times_iculos": ";".join(format(value, ".15g") for value in useful),
+        })
+    return rows
+
+
+def alarm_metrics(
+    frame: pd.DataFrame,
+    probability_column: str,
+    threshold: float | str,
+    refractory_hours: int = ALARM_POLICY["refractory_hours"],
+) -> dict[str, Any]:
+    rows = alarm_event_rows(frame, probability_column, threshold, refractory_hours)
+    eligible_septic = sum(row["onset_eligible_septic"] for row in rows)
+    useful_patients = sum(row["tp_patient"] for row in rows)
+    false_episodes = sum(row["false_alarm_episodes"] for row in rows)
+    decision_hours = sum(row["n_decision_hours"] for row in rows)
+    lead_times = [row["first_eligible_lead_time_hours"] for row in rows if np.isfinite(row["first_eligible_lead_time_hours"])]
+    patient_days = decision_hours / 24
     return {
-        "n_decision_hours": int(len(decisions)),
-        "n_alarm_episodes": int(total_episodes),
+        "n_patients_with_predictions": int(len(rows)),
+        "n_monitored_patients": int(sum(row["primary_monitoring_eligible"] for row in rows)),
+        "n_decision_hours": int(decision_hours),
+        "n_alarm_episodes": int(sum(row["n_alarm_episodes"] for row in rows)),
         "n_onset_eligible_septic_patients": int(eligible_septic),
         "tp_patients": int(useful_patients),
+        "fn_patients": int(eligible_septic - useful_patients),
         "useful_sensitivity": useful_patients / eligible_septic if eligible_septic else math.nan,
         "false_alarm_episodes": int(false_episodes),
         "false_alarm_episodes_per_patient_day": false_episodes / patient_days if patient_days else math.nan,
+        "repeated_alarm_episodes": int(sum(row["repeated_alarm_episodes"] for row in rows)),
+        "late_pre_onset_alarm_episodes": int(sum(row["late_pre_onset_alarm_episodes"] for row in rows)),
+        "post_onset_alarm_episodes": int(sum(row["post_onset_alarm_episodes"] for row in rows)),
+        "right_censored_alarm_episodes": int(sum(row["right_censored_alarm_episodes"] for row in rows)),
+        "left_censored_unclassified_alarm_episodes": int(
+            sum(row["left_censored_unclassified_alarm_episodes"] for row in rows)
+        ),
         "median_lead_time_hours": float(np.median(lead_times)) if lead_times else math.nan,
+        "alarm_episode_policy": (
+            f"rising-edge episode; {refractory_hours}h refractory; persistent positivity does not rearm"
+        ),
+    }
+
+
+def _alarm_metrics_for_threshold(
+    frame: pd.DataFrame,
+    probability_column: str,
+    threshold: float,
+    refractory_hours: int = ALARM_POLICY["refractory_hours"],
+) -> dict[str, Any]:
+    """Vectorized aggregate equivalent used while searching many thresholds."""
+    decisions = primary_decisions(frame).sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
+    probability = _finite_numeric(decisions[probability_column], "Alarm probability")
+    if (
+        ((probability < 0) | (probability > 1)).any()
+        or not 0 <= threshold <= 1
+        or refractory_hours < 1
+    ):
+        raise OnsetKoopmanError("Invalid alarm threshold search")
+    times = _finite_numeric(decisions["ICULOS"], "Alarm ICULOS")
+    patient_codes, patients = pd.factorize(decisions["Patient_ID"], sort=False)
+    positive = probability >= threshold
+    previous_positive = np.zeros(len(positive), dtype=bool)
+    previous_positive[1:] = positive[:-1] & (patient_codes[1:] == patient_codes[:-1])
+    candidates = np.flatnonzero(positive & ~previous_positive)
+    last_episode = np.full(len(patients), -np.inf)
+    accepted = []
+    for position in candidates:
+        patient_code = patient_codes[position]
+        if times[position] - last_episode[patient_code] >= refractory_hours:
+            accepted.append(position)
+            last_episode[patient_code] = times[position]
+    accepted = np.asarray(accepted, dtype=int)
+    onset_values = pd.to_numeric(
+        decisions["TrueSepsisOnset_ICULOS"], errors="coerce"
+    ).to_numpy(dtype=float)
+    patient_onsets = decisions.groupby("Patient_ID", sort=False)[
+        "TrueSepsisOnset_ICULOS"
+    ].first().to_numpy(dtype=float)
+    eligible_septic = int(np.isfinite(patient_onsets).sum())
+    if len(accepted):
+        accepted_onsets = onset_values[accepted]
+        accepted_times = times[accepted]
+        minimum, maximum = ALARM_POLICY["useful_window_hours_before_onset"]
+        useful = (
+            np.isfinite(accepted_onsets)
+            & (accepted_times >= accepted_onsets - maximum)
+            & (accepted_times <= accepted_onsets - minimum)
+        )
+        false = ~np.isfinite(accepted_onsets) | (accepted_times < accepted_onsets - maximum)
+        useful_codes = np.unique(patient_codes[accepted][useful])
+        lead_times = accepted_onsets[useful] - accepted_times[useful]
+        alarm_patients = np.unique(patient_codes[accepted])
+    else:
+        useful_codes = np.empty(0, dtype=int)
+        lead_times = np.empty(0, dtype=float)
+        alarm_patients = np.empty(0, dtype=int)
+        false = np.empty(0, dtype=bool)
+    patient_days = len(decisions) / 24
+    return {
+        "n_monitored_patients": int(len(patients)),
+        "n_patients_with_predictions": int(len(patients)),
+        "n_decision_hours": int(len(decisions)),
+        "n_alarm_episodes": int(len(accepted)),
+        "n_onset_eligible_septic_patients": eligible_septic,
+        "tp_patients": int(len(useful_codes)),
+        "fn_patients": int(eligible_septic - len(useful_codes)),
+        "useful_sensitivity": len(useful_codes) / eligible_septic if eligible_septic else math.nan,
+        "false_alarm_episodes": int(false.sum()),
+        "false_alarm_episodes_per_patient_day": float(false.sum() / patient_days),
+        "repeated_alarm_episodes": int(len(accepted) - len(alarm_patients)),
+        "late_pre_onset_alarm_episodes": 0,
+        "post_onset_alarm_episodes": 0,
+        "right_censored_alarm_episodes": 0,
+        "left_censored_unclassified_alarm_episodes": 0,
+        "median_lead_time_hours": float(np.median(lead_times)) if len(lead_times) else math.nan,
+        "alarm_episode_policy": (
+            f"rising-edge episode; {refractory_hours}h refractory; persistent positivity does not rearm"
+        ),
     }
 
 
@@ -586,7 +735,7 @@ def select_alarm_threshold(
 ) -> tuple[float, dict[str, float | int]]:
     feasible = []
     for threshold in thresholds:
-        metrics = alarm_metrics(inner_oof, probability_column, float(threshold))
+        metrics = _alarm_metrics_for_threshold(inner_oof, probability_column, float(threshold))
         if metrics["false_alarm_episodes_per_patient_day"] <= maximum_false_alarms_per_patient_day:
             feasible.append((float(threshold), metrics))
     if not feasible:
@@ -609,6 +758,42 @@ def primary_performance(frame: pd.DataFrame, probability_column: str) -> dict[st
         "patient_balanced_auroc": float(roc_auc_score(target, probability, sample_weight=weights)),
         "patient_balanced_brier": float(brier_score_loss(target, probability, sample_weight=weights)),
     }
+
+
+def primary_reliability_rows(
+    frame: pd.DataFrame,
+    probability_column: str,
+    representation: str,
+    bins: int = 10,
+) -> list[dict[str, Any]]:
+    """Fixed equal-width reliability data with the primary patient weights."""
+    if bins < 1:
+        raise OnsetKoopmanError("Reliability data require at least one bin")
+    decisions = primary_decisions(frame)
+    probability = _finite_numeric(decisions[probability_column], "Reliability probability")
+    if ((probability < 0) | (probability > 1)).any():
+        raise OnsetKoopmanError("Reliability probabilities must lie in [0,1]")
+    target = decisions[TARGET_COLUMN].to_numpy(dtype=int)
+    weights = equal_patient_weights(decisions)
+    bin_ids = np.minimum((probability * bins).astype(int), bins - 1)
+    rows = []
+    for bin_id in range(bins):
+        mask = bin_ids == bin_id
+        bin_weights = weights[mask]
+        rows.append({
+            "representation": representation,
+            "probability_kind": "fold_specific_nested_calibration",
+            "binning": f"fixed_equal_width_{bins}_bins",
+            "bin": bin_id,
+            "lower": bin_id / bins,
+            "upper": (bin_id + 1) / bins,
+            "n_decision_hours": int(mask.sum()),
+            "n_patients": int(decisions.loc[mask, "Patient_ID"].nunique()),
+            "patient_weight_mass": float(bin_weights.sum()),
+            "mean_prediction": float(np.average(probability[mask], weights=bin_weights)) if mask.any() else math.nan,
+            "observed_frequency": float(np.average(target[mask], weights=bin_weights)) if mask.any() else math.nan,
+        })
+    return rows
 
 
 def paired_patient_bootstrap(
@@ -635,15 +820,39 @@ def paired_patient_bootstrap(
     if repeats < 1 or len(patients) < 2 or set(target) != {0, 1}:
         raise OnsetKoopmanError("Invalid paired patient-bootstrap inputs")
 
+    orders = {
+        "comparator": np.argsort(-p0, kind="mergesort"),
+        "candidate": np.argsort(-p1, kind="mergesort"),
+    }
+
+    def weighted_average_precision(probability: np.ndarray, weight: np.ndarray, order: np.ndarray) -> float:
+        ordered_probability = probability[order]
+        ordered_target = target[order]
+        ordered_weight = weight[order]
+        group_ends = np.flatnonzero(np.r_[ordered_probability[:-1] != ordered_probability[1:], True])
+        true_positive = np.cumsum(ordered_weight * ordered_target)[group_ends]
+        predicted_positive = np.cumsum(ordered_weight)[group_ends]
+        positive_total = true_positive[-1]
+        if positive_total <= 0:
+            raise OnsetKoopmanError("Weighted Average Precision requires positive outcome weight")
+        positive_increment = np.diff(np.r_[0.0, true_positive]) / positive_total
+        precision = np.divide(
+            true_positive,
+            predicted_positive,
+            out=np.zeros_like(true_positive),
+            where=predicted_positive > 0,
+        )
+        return float(np.sum(positive_increment * precision))
+
     def differences(weight: np.ndarray) -> dict[str, float]:
         return {
             "patient_balanced_average_precision": float(
-                average_precision_score(target, p1, sample_weight=weight)
-                - average_precision_score(target, p0, sample_weight=weight)
+                weighted_average_precision(p1, weight, orders["candidate"])
+                - weighted_average_precision(p0, weight, orders["comparator"])
             ),
             "patient_balanced_brier": float(
-                brier_score_loss(target, p1, sample_weight=weight)
-                - brier_score_loss(target, p0, sample_weight=weight)
+                np.average((target - p1) ** 2, weights=weight)
+                - np.average((target - p0) ** 2, weights=weight)
             ),
         }
 
@@ -724,5 +933,58 @@ def decision_curve(
             "n_decision_hours": int(len(decisions)),
             "n_patients": int(len(patients)),
             "uncertainty_unit": "patient-cluster bootstrap",
+        })
+    return rows
+
+
+def paired_decision_curve_difference(
+    comparator: pd.DataFrame,
+    candidate: pd.DataFrame,
+    thresholds: Iterable[float],
+    probability_column: str = "prob_calibrated",
+    repeats: int = 300,
+    seed: int = 20260906,
+) -> list[dict[str, float | int | str]]:
+    """Paired patient-cluster uncertainty for C3 minus C0 net benefit."""
+    key = ["Patient_ID", "ICULOS", TARGET_COLUMN, ELIGIBLE_COLUMN]
+    left = comparator.sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
+    right = candidate.sort_values(["Patient_ID", "ICULOS"], kind="mergesort")
+    if not left[key].reset_index(drop=True).equals(right[key].reset_index(drop=True)):
+        raise OnsetKoopmanError("Paired DCA requires identical decisions")
+    left = primary_decisions(left).reset_index(drop=True)
+    right = primary_decisions(right).reset_index(drop=True)
+    target = left[TARGET_COLUMN].to_numpy(dtype=int)
+    p0 = _finite_numeric(left[probability_column], "Comparator DCA probability")
+    p1 = _finite_numeric(right[probability_column], "Candidate DCA probability")
+    if ((p0 < 0) | (p0 > 1) | (p1 < 0) | (p1 > 1)).any() or repeats < 1:
+        raise OnsetKoopmanError("Invalid paired DCA inputs")
+    codes, patients = pd.factorize(left["Patient_ID"], sort=True)
+    patient_counts = np.bincount(codes, minlength=len(patients))
+    rows = []
+    for threshold in thresholds:
+        threshold = float(threshold)
+        if not 0 < threshold < 1:
+            raise OnsetKoopmanError("DCA thresholds must lie strictly inside (0,1)")
+        odds = threshold / (1 - threshold)
+        contribution0 = (p0 >= threshold) * target - (p0 >= threshold) * (1 - target) * odds
+        contribution1 = (p1 >= threshold) * target - (p1 >= threshold) * (1 - target) * odds
+        difference = contribution1 - contribution0
+        by_patient = np.bincount(codes, weights=difference, minlength=len(patients))
+        rng = np.random.default_rng(seed + int(threshold * 10000))
+        samples = []
+        for _ in range(repeats):
+            multiplicity = rng.multinomial(
+                len(patients), np.full(len(patients), 1 / len(patients))
+            )
+            samples.append(float((multiplicity @ by_patient) / (multiplicity @ patient_counts)))
+        low, high = np.quantile(samples, [0.025, 0.975])
+        rows.append({
+            "outcome_estimand": "true onset in 1--6 hours",
+            "threshold_probability": threshold,
+            "C3_minus_C0_net_benefit": float(difference.mean()),
+            "C3_minus_C0_net_benefit_ci_95_low": float(low),
+            "C3_minus_C0_net_benefit_ci_95_high": float(high),
+            "bootstrap_repeats": repeats,
+            "uncertainty_unit": "paired patient-cluster bootstrap",
         })
     return rows
