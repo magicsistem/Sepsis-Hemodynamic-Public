@@ -79,7 +79,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: local v6 static syntax/diff checks pass; clean committed CEDIA suite pending.
 
 - [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
-  EVIDENCE: exact run 20260921T204909Z-49ef63a passed tests but prepare job 26866 failed closed at 9.96/10 GB before profiling; the unnecessary full-width feature reload is corrected and a fresh exact-source profile is required.
+  EVIDENCE: run 20260922T023019Z-7dd43ca validated the corrected 10 GB prepare stage, then CPU8 profile 26894 failed closed because the fixed 1,000-patient positive B stratum does not exist after correct left-censor exclusion. The benchmark is corrected to balance deterministically to the rarest eligible stratum with a 500-patient floor; fresh exact-source evidence is required.
 
 - [ ] G20: one clean bash run.sh execution completes prepare, model, and finalize; all hashes, OOF identities, nested provenance, resource manifests, and final scientific gates pass an independent audit
   EVIDENCE: pending final CEDIA run and independent audit; no PASS may be inferred from process exit alone.

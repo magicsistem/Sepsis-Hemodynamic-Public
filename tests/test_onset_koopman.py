@@ -496,6 +496,27 @@ class InferenceTransportTests(unittest.TestCase):
 
 
 class ResourceOrchestrationTests(unittest.TestCase):
+    def test_profile_subset_balances_to_the_rarest_eligible_stratum(self):
+        rows = []
+        for source, outcome, count in (("A", 0, 4), ("A", 1, 3), ("B", 0, 5), ("B", 1, 2)):
+            for index in range(count):
+                rows.append({
+                    "Patient_ID": f"{source}:{outcome}:{index}", "SourceSet": source,
+                    koopman.TARGET_COLUMN: outcome, koopman.ELIGIBLE_COLUMN: 1,
+                })
+        frame = pd.DataFrame(rows)
+        selected = profile_resources.fixed_patients(
+            frame, maximum_per_stratum=3, minimum_per_stratum=1
+        )
+        strata = frame.loc[frame["Patient_ID"].isin(selected)].groupby(
+            ["SourceSet", koopman.TARGET_COLUMN]
+        ).size()
+        self.assertEqual(strata.to_dict(), {("A", 0): 2, ("A", 1): 2, ("B", 0): 2, ("B", 1): 2})
+        with self.assertRaisesRegex(pipeline.PipelineError, "fewer than 3"):
+            profile_resources.fixed_patients(
+                frame, maximum_per_stratum=3, minimum_per_stratum=3
+            )
+
     def test_failed_gnu_time_diagnostic_is_parsed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "time.txt"

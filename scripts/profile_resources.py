@@ -18,18 +18,31 @@ from src import scientific_pipeline as pipeline
 
 BENCHMARK_XGBOOST_FITS = 10
 BENCHMARK_XGBOOST_ESTIMATORS = 200
+BENCHMARK_MAX_PATIENTS_PER_STRATUM = 1000
+BENCHMARK_MIN_PATIENTS_PER_STRATUM = 500
 
 
-def fixed_patients(features: pd.DataFrame, per_source_outcome: int = 1000) -> list[str]:
+def fixed_patients(
+    features: pd.DataFrame,
+    maximum_per_stratum: int = BENCHMARK_MAX_PATIENTS_PER_STRATUM,
+    minimum_per_stratum: int = BENCHMARK_MIN_PATIENTS_PER_STRATUM,
+) -> list[str]:
     decisions = onset.primary_decisions(features)
     patients = decisions.groupby("Patient_ID", sort=True).agg(
         SourceSet=("SourceSet", "first"), outcome=(onset.TARGET_COLUMN, "max")
     ).reset_index()
+    groups = list(patients.groupby(["SourceSet", "outcome"], sort=True))
+    counts = {f"{source}:{int(outcome)}": int(len(group)) for (source, outcome), group in groups}
+    if len(groups) != 4:
+        raise pipeline.PipelineError(f"Fixed resource benchmark requires four source/outcome strata; got {counts}")
+    per_stratum = min(maximum_per_stratum, min(counts.values()))
+    if per_stratum < minimum_per_stratum:
+        raise pipeline.PipelineError(
+            f"Fixed resource benchmark has fewer than {minimum_per_stratum} eligible patients in a stratum: {counts}"
+        )
     selected = []
-    for _, group in patients.groupby(["SourceSet", "outcome"], sort=True):
-        selected.extend(group.head(per_source_outcome)["Patient_ID"].tolist())
-    if len(selected) < per_source_outcome * 4:
-        raise pipeline.PipelineError("Fixed resource benchmark cannot fill all source/outcome strata")
+    for _, group in groups:
+        selected.extend(group.head(per_stratum)["Patient_ID"].tolist())
     return sorted(selected)
 
 
@@ -99,6 +112,9 @@ def benchmark(run_dir: Path, output: Path) -> dict:
         "status": "PASS",
         "fixed_subset_patient_hash": pipeline.stable_hash(patients),
         "n_patients": len(patients),
+        "patients_per_source_outcome_stratum": len(patients) // 4,
+        "maximum_patients_per_source_outcome_stratum": BENCHMARK_MAX_PATIENTS_PER_STRATUM,
+        "minimum_patients_per_source_outcome_stratum": BENCHMARK_MIN_PATIENTS_PER_STRATUM,
         "n_rows": len(subset),
         "selected_signals": list(supported),
         "io_seconds": io_seconds,

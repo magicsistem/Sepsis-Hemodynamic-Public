@@ -247,8 +247,9 @@ registra el resultado negativo y no se añade una red mayor.
 
 1. suite completa;
 2. `prepare` CPU;
-3. benchmark estratificado fijo de 4,000 pacientes, dos lifts Koopman y diez
-   fits XGBoost de 200 árboles, CPU 8/16/32 y GPU 8/16/32 cores; CEDIA exige al menos
+3. benchmark estratificado fijo de hasta 4,000 pacientes, balanceado al tamaño
+   del estrato SourceSet/outcome elegible más pequeño (mínimo 500 por estrato),
+   dos lifts Koopman y diez fits XGBoost de 200 árboles, CPU 8/16/32 y GPU 8/16/32 cores; CEDIA exige al menos
    8 CPU para cualquier job de la partición GPU;
 4. `model` con el perfil seleccionado;
 5. `finalize` CPU;
