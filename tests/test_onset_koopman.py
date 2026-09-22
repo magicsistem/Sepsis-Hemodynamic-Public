@@ -182,6 +182,40 @@ def primary_oof() -> pd.DataFrame:
 
 
 class NestedPolicyTests(unittest.TestCase):
+    def test_inner_selection_executes_patient_partitions(self):
+        class Model:
+            best_iteration = 0
+            n_estimators = 1
+
+            def fit(self, *_args, **_kwargs):
+                return self
+
+            def predict_proba(self, values):
+                probability = np.asarray(values[:, 0], dtype=float)
+                return np.column_stack([1.0 - probability, probability])
+
+        rows = []
+        for index in range(12):
+            target = index % 2
+            rows.append({
+                "Patient_ID": f"A:p{index:02d}", "SourceSet": "A", "ICULOS": 1,
+                "Age": 0.8 if target else 0.2, "SepsisLabel": target,
+                "TrueSepsisOnset_ICULOS": 2.0 if target else math.nan,
+                "OnsetReconstructionStatus": "exact_from_shift_transition" if target else "nonseptic",
+                koopman.TARGET_COLUMN: target, koopman.ELIGIBLE_COLUMN: 1,
+            })
+        train = pd.DataFrame(rows)
+        with (
+            mock.patch.object(pipeline, "primary_model_features", return_value=["Age"]),
+            mock.patch.object(pipeline, "xgb_model", side_effect=lambda *_args, **_kwargs: Model()),
+        ):
+            _, _, _, inner_oof, detail = pipeline.select_inner_primary_model(
+                train, "C0", {"available": False}, outer_fold=0
+            )
+        self.assertEqual(set(inner_oof["Patient_ID"]), set(train["Patient_ID"]))
+        self.assertFalse(inner_oof.duplicated(["Patient_ID", "ICULOS"]).any())
+        self.assertEqual(len(detail), len(pipeline.MODEL_CANDIDATES) * pipeline.MODEL_POLICY["inner_folds"])
+
     def test_calibration_and_threshold_use_inner_oof_contract(self):
         inner = primary_oof()
         calibration = koopman.fit_calibration_policy(inner)

@@ -730,6 +730,10 @@ PRIMARY_OOF_COLUMNS = [
 ]
 
 
+def patient_mask(frame: pd.DataFrame, patients: Iterable[str]) -> np.ndarray:
+    return frame["Patient_ID"].isin(set(patients)).to_numpy()
+
+
 def primary_patient_splits(
     frame: pd.DataFrame,
     n_splits: int = MODEL_POLICY["inner_folds"],

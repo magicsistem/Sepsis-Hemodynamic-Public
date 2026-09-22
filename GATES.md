@@ -10,16 +10,16 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: historical job 26808 passed 48/48 for commit 78dc8d7; the current v6 robustness/resource source requires a new clean committed CEDIA suite before this gate can close.
+  EVIDENCE: exact job 26895 passed 53/53 for commit 908d5e4, but full-run model job 26908 exposed an unexecuted inner-selection path after a shared helper was removed. The restored path and new executable oracle require a fresh exact-commit CEDIA suite.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
-  EVIDENCE: job 26224 generated the complete artifact family but failed closed at final validation because pandas 1.5 returned `usecols` in file order; the preserved manifest remains PENDING_FINAL_VALIDATION. The user explicitly prohibited a replacement full run.
+  EVIDENCE: run 20260922T033943Z-908d5e4 reached model after exact tests, prepare and profiles, then failed closed in job 26908 before training; no finalize job or final manifest exists for that run.
 
 - [ ] G4: every finding is closed with current evidence or explicitly classified as author action, external-data blocked, or manuscript deferred
-  EVIDENCE: N054 is implemented and the recovered artifacts pass all 52 declared hashes plus exact 1,552,210-row OOF identity, but the corrected source was not executed on CEDIA.
+  EVIDENCE: the private matrix preserves all 234 audit IDs and N001--N077; N077 remains IMPLEMENTED but not dynamically verified, and all rerun-dependent findings remain open.
 
 - [ ] G5: an independent final audit verifies data lineage, no-future features, nested selection, calibration, Utility, metric identities, and reporting traceability
-  EVIDENCE: the complete job-26224 package was recovered locally; all 52 declared artifact hashes and exact features/folds/baseline/enhanced OOF identity passed. Remaining final-validator checks were not executed after N054, so no PASS is claimed.
+  EVIDENCE: pending a successful exact-source full run; historical packages and partial run 20260922T033943Z-908d5e4 cannot satisfy this gate.
 
 
 ## Gates: methodology and results reconstruction
@@ -28,7 +28,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: docs/EXPERIMENT_RECONSTRUCTION.md and docs/LINE_BY_LINE_SCIENTIFIC_AUDIT.md classify active source, superseded outputs, raw binary input, run history, and unreachable historical result trees; reviewed again before job 26130 was allowed to continue.
 
 - [ ] G7: the current corrected rerun is independently revalidated and every reported number maps to a hash-verified artifact
-  EVIDENCE: pending corrected rerun after N036.
+  EVIDENCE: pending fresh exact-source rerun after N077 and independent artifact revalidation.
 
 - [ ] G8: the master result table includes every executed current model, calibration, transport, stability, subgroup, temporal, DCA, inference, and ablation result
   EVIDENCE: pending corrected rerun artifact inventory; no manuscript is in scope.
@@ -58,7 +58,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 - [ ] G14: C0--C3 model selection, representation fitting, calibration choice, and alarm threshold selection use inner-training/inner-OOF data only
   CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests -v && printf 'G14_NESTED_POLICY_PASS\n'
   EXPECT: G14_NESTED_POLICY_PASS
-  EVIDENCE: inner held-out predictions now remove redundant refits and seed/balance sensitivities reuse only outer-train-selected settings; current v6 exact-commit CEDIA suite pending.
+  EVIDENCE: job 26908 failed closed before training because `patient_mask` had been removed with legacy code while direct-onset inner selection still called it. The helper is restored and an oracle now executes all patient partitions; exact-commit CEDIA verification is pending.
 
 - [ ] G15: primary patient-balanced AP inference, six-hour alarm budget, lead time, DCA, and A-to-B/B-to-A transport are recomputable from current-run artifacts without destination labels
   CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests -v && printf 'G15_INFERENCE_TRANSPORT_PASS\n'
@@ -79,11 +79,12 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: local v6 static syntax/diff checks pass; clean committed CEDIA suite pending.
 
 - [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
-  EVIDENCE: run 20260922T023019Z-7dd43ca validated the corrected 10 GB prepare stage, then CPU8 profile 26894 failed closed because the fixed 1,000-patient positive B stratum does not exist after correct left-censor exclusion. The benchmark is corrected to balance deterministically to the rarest eligible stratum with a 500-patient floor; fresh exact-source evidence is required.
+  EVIDENCE: run 20260922T033943Z-908d5e4 completed all six profiles on compute-0-2 and selected CPU16/14 GB: 63.64 s, 55.999% active compute efficiency, within 5% of the 63.64 s fastest eligible profile; GPU was slower. This evidence remains historical after the source correction and must be regenerated for the final exact commit.
 
 - [ ] G20: one clean bash run.sh execution completes prepare, model, and finalize; all hashes, OOF identities, nested provenance, resource manifests, and final scientific gates pass an independent audit
-  EVIDENCE: pending final CEDIA run and independent audit; no PASS may be inferred from process exit alone.
+  EVIDENCE: run 20260922T033943Z-908d5e4 passed tests, prepare and all profiles, then model job 26908 failed closed with undefined `patient_mask`; finalize was not submitted and no result was promoted. Fresh exact-source full run and independent audit remain required.
 
 - [ ] G21: the 2026-09-21 reviewer recommendations are separated into executable evidence and manuscript-only actions without changing the paper
-  CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.MethodologyDocumentTests -v
+  CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G21_REVIEWER_REQUIREMENTS_PASS\n'
+  EXPECT: G21_REVIEWER_REQUIREMENTS_PASS
   EVIDENCE: C0--C3 ablation plus three seeds and three training-balance policies are implemented as non-selective sensitivity artifacts. Journal citations/title/Abstract/contributions/Discussion/Conclusion/future-work/special-issue alignment remain explicitly DEFERRED_TO_MANUSCRIPT_PHASE. Current exact-commit CEDIA suite and final artifacts pending.
