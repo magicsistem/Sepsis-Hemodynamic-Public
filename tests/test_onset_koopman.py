@@ -205,7 +205,14 @@ class NestedPolicyTests(unittest.TestCase):
                 koopman.TARGET_COLUMN: target, koopman.ELIGIBLE_COLUMN: 1,
             })
         train = pd.DataFrame(rows)
+        patient_rows = train[["Patient_ID", koopman.TARGET_COLUMN]].copy()
+        splits = []
+        indices = np.arange(len(patient_rows))
+        for start in range(0, len(patient_rows), 4):
+            valid = indices[start:start + 4]
+            splits.append((np.setdiff1d(indices, valid), valid))
         with (
+            mock.patch.object(pipeline, "primary_patient_splits", return_value=(patient_rows, splits)),
             mock.patch.object(pipeline, "primary_model_features", return_value=["Age"]),
             mock.patch.object(pipeline, "xgb_model", side_effect=lambda *_args, **_kwargs: Model()),
         ):
