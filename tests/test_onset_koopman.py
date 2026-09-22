@@ -582,6 +582,10 @@ class ResourceOrchestrationTests(unittest.TestCase):
             self.assertEqual(measured["max_memory_used_mib"], 1200.0)
 
     def test_profile_workload_represents_full_model_mix(self):
+        self.assertEqual(
+            profile_resources.estimated_full_peak_gb(2.0, 4.0, 0.5, 0.25),
+            24.75,
+        )
         outer = pipeline.MODEL_POLICY["outer_folds"]
         inner = pipeline.MODEL_POLICY["inner_folds"]
         candidates = len(pipeline.MODEL_CANDIDATES)
@@ -643,7 +647,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
                         },
                     },
                     "benchmark": {
-                        "status": "PASS", "estimated_full_peak_gb": 10.0,
+                        "status": "PASS", "estimated_full_peak_gb": 25.5,
                         "active_cpu_efficiency": efficiency,
                     },
                 }
@@ -653,7 +657,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 profile_dir=root, output=output, run_id="run",
                 git_commit="a" * 40, source_inventory="b" * 64,
             ))
-            self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 12, "gpus": 1})
+            self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 32, "gpus": 1})
             self.assertEqual(selected["selected_profile_active_gpu_samples"], 5)
             self.assertLessEqual(selected["selected"]["cpus"], 32)
             self.assertLessEqual(selected["selected"]["memory_gb"], 64)
@@ -705,6 +709,8 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn('partition=gpu', entrypoint)
         self.assertIn("RESUME_RUN_ID", entrypoint)
         self.assertIn("verify-stage", entrypoint)
+        self.assertNotIn("json.load(open(", entrypoint)
+        self.assertIn('with open(sys.argv[1], encoding="utf-8") as handle:', entrypoint)
         self.assertIn("HOST_PYTHON=${HOST_PYTHON:-python3}", entrypoint)
         self.assertIn("--nodelist=compute-0-2", job)
         self.assertNotIn("compute-0-1", job)

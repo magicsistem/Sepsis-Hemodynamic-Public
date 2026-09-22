@@ -20,6 +20,21 @@ BENCHMARK_XGBOOST_FITS = 10
 BENCHMARK_XGBOOST_ESTIMATORS = 200
 BENCHMARK_MAX_PATIENTS_PER_STRATUM = 1000
 BENCHMARK_MIN_PATIENTS_PER_STRATUM = 500
+FULL_FEATURE_FRAME_EQUIVALENTS_AT_MODEL_PEAK = 8
+
+
+def estimated_full_peak_gb(
+    full_feature_gb: float,
+    largest_outer_quadratic_gb: float,
+    primary_oof_pair_gb: float,
+    robustness_wide_gb: float,
+) -> float:
+    return (
+        FULL_FEATURE_FRAME_EQUIVALENTS_AT_MODEL_PEAK * full_feature_gb
+        + 2 * largest_outer_quadratic_gb
+        + primary_oof_pair_gb
+        + robustness_wide_gb
+    )
 
 
 def fixed_patients(
@@ -143,18 +158,23 @@ def benchmark(run_dir: Path, output: Path) -> dict:
         ),
         "gpu": gpu,
         "full_feature_memory_gb": full_feature_gb,
+        "full_feature_frame_equivalents_at_model_peak": (
+            FULL_FEATURE_FRAME_EQUIVALENTS_AT_MODEL_PEAK
+        ),
         "largest_outer_quadratic_matrix_gb": largest_outer_quadratic_gb,
         "primary_oof_pair_estimated_gb": primary_oof_pair_gb,
         "robustness_wide_oof_estimated_gb": robustness_wide_gb,
-        "estimated_full_peak_gb": (
-            full_feature_gb
-            + 2 * largest_outer_quadratic_gb
-            + primary_oof_pair_gb
-            + robustness_wide_gb
+        "estimated_full_peak_gb": estimated_full_peak_gb(
+            full_feature_gb,
+            largest_outer_quadratic_gb,
+            primary_oof_pair_gb,
+            robustness_wide_gb,
         ),
         "estimation_note": (
-            "feature frame, two largest outer-fold quadratic matrices, paired "
-            "C0/C3 primary OOF, and one identity plus ten float32 robustness "
+            "eight concurrent full-feature-frame equivalents: seven measured at "
+            "the nested C0 boundary plus one for transient model-matrix/runtime "
+            "overhead; two largest outer-fold quadratic matrices, "
+            "paired C0/C3 primary OOF, and one identity plus ten float32 robustness "
             "probability columns; no artificial allocation"
         ),
     }

@@ -160,7 +160,8 @@ fi
 
 read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
 import json, sys
-selected = json.load(open(sys.argv[1], encoding="utf-8"))["selected"]
+with open(sys.argv[1], encoding="utf-8") as handle:
+    selected = json.load(handle)["selected"]
 print(selected["cpus"], selected["memory_gb"], selected["gpus"])
 PY
 )
@@ -176,7 +177,12 @@ else
     PREVIOUS_JOB=$MODEL_JOB
 fi
 if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
-    RESULT_STATUS=$("$HOST_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("computational_status", "missing"))' "$RUN_DIR/result_manifest.json")
+    RESULT_STATUS=$("$HOST_PYTHON" - "$RUN_DIR/result_manifest.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("computational_status", "missing"))
+PY
+)
     if [[ "$RESULT_STATUS" == COMPUTATIONAL_RUN_VALIDATED ]]; then
         printf 'SCIENTIFIC_RUN_ALREADY_VALIDATED run_id=%s run_dir=%s\n' "$RUN_ID" "$RUN_DIR"
         exit 0

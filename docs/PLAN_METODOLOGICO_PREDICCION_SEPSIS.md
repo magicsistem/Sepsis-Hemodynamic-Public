@@ -261,6 +261,11 @@ del 5 % del más rápido; GPU sólo con >5 % de ventaja total, al menos tres mue
 activas y utilización GPU activa media >50 %. CPU requiere eficiencia >50 %
 durante la ventana de cómputo, separada de I/O y startup. RAM es pico
 medido/estimado +20 %, redondeada a 2 GB; 64 GB es un techo, no un objetivo.
+El pico estimado de `model` incluye ocho equivalentes concurrentes de la matriz
+completa de features: siete fijados por el límite empírico de la ruta nested C0
+y uno para overhead transitorio de matrices/runtime, más
+las dos mayores matrices cuadráticas outer, OOF primario y OOF de robustness;
+el margen de 20 % se aplica después de sumar esos componentes.
 `prepare` usa un CPU y 10 GB, derivados del último pico exitoso de 8.02 GB más
 20 %, porque más threads no aceleraron esa ruta serial. Un intento exacto agotó
 ese límite al volver a cargar innecesariamente la matriz ancha después de

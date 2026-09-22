@@ -10,7 +10,7 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: 2026-09-07 local exit 0; 234/234 Memory IDs, EXPERIMENT_PROGRESS.md ignored by .git/info/exclude; output finding-ledger-verification-passed
 
 - [ ] G2: all executable scientific, mathematical, provenance, and fail-closed tests pass
-  EVIDENCE: exact job 26895 passed 53/53 for commit 908d5e4, but full-run model job 26908 exposed an unexecuted inner-selection path after a shared helper was removed. The restored path and new executable oracle require a fresh exact-commit CEDIA suite.
+  EVIDENCE: jobs 26923, 26924 and 26935 passed 54/54 for a9ef091, including the restored inner-selection route. The corrected full-memory estimator and warning-free resume reader now require a fresh exact-commit suite.
 
 - [ ] G3: the canonical run.sh completes an end-to-end CEDIA run and validates the final result manifest
   EVIDENCE: run 20260922T033943Z-908d5e4 reached model after exact tests, prepare and profiles, then failed closed in job 26908 before training; no finalize job or final manifest exists for that run.
@@ -79,10 +79,10 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   EVIDENCE: local v6 static syntax/diff checks pass; clean committed CEDIA suite pending.
 
 - [ ] G19: a fixed-subset CEDIA benchmark measures CPU/GPU profiles and selects the smallest profile within 5% of the fastest, with measured memory plus 20% margin and all caps enforced
-  EVIDENCE: run 20260922T033943Z-908d5e4 completed all six profiles on compute-0-2 and selected CPU16/14 GB: 63.64 s, 55.999% active compute efficiency, within 5% of the 63.64 s fastest eligible profile; GPU was slower. This evidence remains historical after the source correction and must be regenerated for the final exact commit.
+  EVIDENCE: run 20260922T140816Z-a9ef091 selected GPU16/14 GB from six valid profiles, but model job 26936 reached the 14 GB cgroup before C3. The estimator had counted one full feature frame although the nested C0 boundary measured seven concurrent frame equivalents; one additional equivalent represents transient model-matrix/runtime overhead. The corrected estimate plus 20% rounds to the user-approved 32 GB; fresh exact-source verification is required.
 
 - [ ] G20: one clean bash run.sh execution completes prepare, model, and finalize; all hashes, OOF identities, nested provenance, resource manifests, and final scientific gates pass an independent audit
-  EVIDENCE: run 20260922T033943Z-908d5e4 passed tests, prepare and all profiles, then model job 26908 failed closed with undefined `patient_mask`; finalize was not submitted and no result was promoted. Fresh exact-source full run and independent audit remain required.
+  EVIDENCE: run 20260922T140816Z-a9ef091 passed tests, prepare and profiles; model 26936 failed closed `OUT_OF_MEMORY` at 14.018 GiB with no OOF/result artifacts and no finalize. Fresh exact-source full run and independent audit remain required.
 
 - [ ] G21: the 2026-09-21 reviewer recommendations are separated into executable evidence and manuscript-only actions without changing the paper
   CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G21_REVIEWER_REQUIREMENTS_PASS\n'
