@@ -480,6 +480,39 @@ class ScientificPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(pipeline.PipelineError, "unsafe existing run content"):
                 pipeline.prepare_direct_onset_stage(root, root / "archive.zip", unsafe, "run")
 
+    def test_prepare_does_not_reload_the_wide_feature_matrix(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {"PYTHONHASHSEED": str(pipeline.SEED)},
+        ):
+            root = Path(directory)
+            run_dir = root / "run"
+            summary = pd.DataFrame({
+                "Patient_ID": ["p1", "p2"], "SourceSet": ["A", "B"],
+                "SepsisLabel": [0, 1],
+                "OnsetReconstructionStatus": ["nonseptic", "septic_onset_observed"],
+                pipeline.onset.ELIGIBLE_COLUMN: [1, 1],
+            })
+            patient_hash = pipeline.stable_hash(
+                summary.groupby("Patient_ID", sort=True)["SepsisLabel"]
+                .max().astype(int).reset_index().to_dict("records")
+            )
+            with mock.patch.object(pipeline, "runtime_manifest", return_value={"git_dirty": False}), \
+                 mock.patch.object(pipeline, "harmonize_archive", return_value={}), \
+                 mock.patch.object(pipeline, "build_features", return_value={}), \
+                 mock.patch.object(pipeline.pd, "read_csv", return_value=summary) as read_csv, \
+                 mock.patch.object(pipeline, "write_folds", return_value={"patient_inventory_hash": patient_hash}), \
+                 mock.patch.object(pipeline, "cohort_flow_summary", return_value={}), \
+                 mock.patch.object(pipeline, "atomic_json"), \
+                 mock.patch.object(pipeline, "_write_stage", return_value={"status": "PASS"}):
+                pipeline.prepare_direct_onset_stage(root, root / "archive.zip", run_dir, "run")
+            read_csv.assert_called_once_with(
+                run_dir / "features.csv",
+                usecols=[
+                    "Patient_ID", "SourceSet", "SepsisLabel",
+                    "OnsetReconstructionStatus", pipeline.onset.ELIGIBLE_COLUMN,
+                ],
+            )
+
     def test_outer_fold_assignment_is_never_a_model_feature(self):
         frame = pd.DataFrame(columns=["Patient_ID", "SourceSet", "SepsisLabel", "TrueSepsisOnset_ICULOS", "OnsetReconstructionStatus", "Fold", "Hct_last_obs"])
         self.assertNotIn("Fold", pipeline.model_features(frame, "baseline"))

@@ -2066,7 +2066,13 @@ def prepare_direct_onset_stage(root: Path, archive: Path, run_dir: Path, run_id:
     atomic_json(run_dir / "harmonized_manifest.json", harmonized)
     features = build_features(run_dir / "harmonized.csv", run_dir / "features.csv")
     atomic_json(run_dir / "features_manifest.json", features)
-    feature_frame = pd.read_csv(run_dir / "features.csv")
+    # Folds and cohort accounting need only these columns. Reloading the full
+    # wide matrix here exceeded the 10 GB prepare cgroup after feature export.
+    summary_columns = [
+        "Patient_ID", "SourceSet", "SepsisLabel", "OnsetReconstructionStatus",
+        onset.ELIGIBLE_COLUMN,
+    ]
+    feature_frame = pd.read_csv(run_dir / "features.csv", usecols=summary_columns)
     patient_hash = stable_hash(
         feature_frame.groupby("Patient_ID", sort=True)["SepsisLabel"].max().astype(int).reset_index().to_dict("records")
     )

@@ -260,9 +260,13 @@ del 5 % del más rápido; GPU sólo con >5 % de ventaja total, al menos tres mue
 activas y utilización GPU activa media >50 %. CPU requiere eficiencia >50 %
 durante la ventana de cómputo, separada de I/O y startup. RAM es pico
 medido/estimado +20 %, redondeada a 2 GB; 64 GB es un techo, no un objetivo.
-`prepare` usa un CPU y 10 GB, derivados del pico observado más 20 %, porque más
-threads no aceleraron esa ruta serial. El muestreo GPU se hace cada segundo para
-no perder fits cortos. No se llena memoria artificialmente.
+`prepare` usa un CPU y 10 GB, derivados del último pico exitoso de 8.02 GB más
+20 %, porque más threads no aceleraron esa ruta serial. Un intento exacto agotó
+ese límite al volver a cargar innecesariamente la matriz ancha después de
+exportarla; la frontera corregida carga sólo las cinco columnas necesarias para
+folds y flujo de cohorte. El nuevo perfil debe confirmar el margen antes del run
+completo. El muestreo GPU se hace cada segundo para no perder fits cortos. No se
+llena memoria artificialmente.
 
 La mezcla del benchmark aproxima la carga planificada: 10/2 = 5 fits XGBoost
 por ajuste Koopman frente a 278/49 = 5.67 en el run completo. Un benchmark de
