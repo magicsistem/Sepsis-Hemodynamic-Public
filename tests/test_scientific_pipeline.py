@@ -222,17 +222,31 @@ class ScientificPipelineTests(unittest.TestCase):
                 fragmented[f"feature_{index}"] = float(index)
         with warnings.catch_warnings():
             warnings.simplefilter("error", pd.errors.PerformanceWarning)
-            scored = pipeline.attach_primary_predictions(
+            scored = pipeline.attach_prediction_columns(
                 fragmented,
-                np.array([0.2, 0.8]),
-                np.array([0.25, 0.75]),
+                {
+                    "prob_raw": np.array([0.2, 0.8]),
+                    "prob_calibrated": np.array([0.25, 0.75]),
+                },
+                "nested_alarm_threshold",
                 0.5,
             )
         self.assertEqual(scored["prob_raw"].tolist(), [0.2, 0.8])
         self.assertEqual(scored["prob_calibrated"].tolist(), [0.25, 0.75])
         self.assertEqual(scored["nested_alarm_threshold"].tolist(), [0.5, 0.5])
         with self.assertRaises(pipeline.PipelineError):
-            pipeline.attach_primary_predictions(scored, [0.2, 0.8], [0.2, 0.8], 0.5)
+            pipeline.attach_prediction_columns(
+                scored, {"prob_raw": [0.2, 0.8]}, "transport_threshold", 0.5
+            )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pd.errors.PerformanceWarning)
+            transported = pipeline.attach_prediction_columns(
+                fragmented,
+                {"prob_calibrated": [0.3, 0.7]},
+                "transport_threshold",
+                0.4,
+            )
+        self.assertEqual(transported["transport_threshold"].tolist(), [0.4, 0.4])
 
     def test_sampen_oracle_zero_match_and_no_second_backend(self):
         # Compatible starts only: four constants give B=1 and A=1.

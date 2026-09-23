@@ -730,30 +730,29 @@ PRIMARY_OOF_COLUMNS = [
 ]
 
 
-def attach_primary_predictions(
+def attach_prediction_columns(
     frame: pd.DataFrame,
-    raw_probability: Iterable[float],
-    calibrated_probability: Iterable[float],
+    probabilities: dict[str, Iterable[float]],
+    threshold_column: str,
     threshold: float,
 ) -> pd.DataFrame:
     """Append prediction columns in one block so wide feature frames stay usable."""
-    columns = ("prob_raw", "prob_calibrated", "nested_alarm_threshold")
-    if any(column in frame.columns for column in columns):
-        raise PipelineError("Primary prediction columns already exist")
-    raw = probability_array(raw_probability, "Primary raw probability")
-    calibrated = probability_array(calibrated_probability, "Primary calibrated probability")
-    if len(raw) != len(frame) or len(calibrated) != len(frame):
-        raise PipelineError("Primary prediction length does not match the feature frame")
+    if not probabilities or threshold_column in probabilities:
+        raise PipelineError("Prediction columns require probabilities and one distinct threshold")
+    columns = [*probabilities, threshold_column]
+    if len(columns) != len(set(columns)) or any(column in frame.columns for column in columns):
+        raise PipelineError("Prediction columns already exist or are duplicated")
+    validated = {
+        name: probability_array(values, f"Prediction column {name}")
+        for name, values in probabilities.items()
+    }
+    if any(len(values) != len(frame) for values in validated.values()):
+        raise PipelineError("Prediction length does not match the feature frame")
     threshold = float(threshold)
     if not np.isfinite(threshold) or not 0 <= threshold <= 1:
-        raise PipelineError("Primary alarm threshold must be finite and in [0,1]")
+        raise PipelineError("Alarm threshold must be finite and in [0,1]")
     predictions = pd.DataFrame(
-        {
-            "prob_raw": raw,
-            "prob_calibrated": calibrated,
-            "nested_alarm_threshold": threshold,
-        },
-        index=frame.index,
+        {**validated, threshold_column: threshold}, index=frame.index
     )
     return pd.concat([frame, predictions], axis=1)
 
@@ -1138,8 +1137,11 @@ def primary_outer_oof(
         fit_xgb(model, train_decisions, columns, target_column=onset.TARGET_COLUMN)
         raw_probability = model.predict_proba(matrix(transformed_test, columns))[:, 1]
         calibrated_probability = onset.apply_calibration(calibration, raw_probability)
-        transformed_test = attach_primary_predictions(
-            transformed_test, raw_probability, calibrated_probability, threshold
+        transformed_test = attach_prediction_columns(
+            transformed_test,
+            {"prob_raw": raw_probability, "prob_calibrated": calibrated_probability},
+            "nested_alarm_threshold",
+            threshold,
         )
         records.append(transformed_test[PRIMARY_OOF_COLUMNS])
         if representation in ROBUSTNESS_POLICY["representations"]:
@@ -1690,10 +1692,15 @@ def fit_primary_source_transport(
         model, onset.primary_decisions(transformed_train), columns,
         target_column=onset.TARGET_COLUMN,
     )
-    transformed_test["prob_calibrated"] = onset.apply_calibration(
+    calibrated_probability = onset.apply_calibration(
         calibration, model.predict_proba(matrix(transformed_test, columns))[:, 1]
     )
-    transformed_test["transport_threshold"] = threshold
+    transformed_test = attach_prediction_columns(
+        transformed_test,
+        {"prob_calibrated": calibrated_probability},
+        "transport_threshold",
+        threshold,
+    )
     performance = onset.primary_performance(transformed_test, "prob_calibrated")
     alarm = onset.alarm_metrics(transformed_test, "prob_calibrated", "transport_threshold")
     experiment = f"train_{train_source}_test_{test_source}"
