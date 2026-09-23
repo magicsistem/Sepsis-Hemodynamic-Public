@@ -214,6 +214,26 @@ class ScientificPipelineTests(unittest.TestCase):
         self.assertIn("SBP_cv_8h", features.columns)
         self.assertFalse(any("sampen" in column or "_iqr_" in column for column in features.columns))
 
+    def test_prediction_columns_do_not_fragment_wide_frames(self):
+        fragmented = pd.DataFrame({"Patient_ID": ["A:1", "A:2"]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
+            for index in range(150):
+                fragmented[f"feature_{index}"] = float(index)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pd.errors.PerformanceWarning)
+            scored = pipeline.attach_primary_predictions(
+                fragmented,
+                np.array([0.2, 0.8]),
+                np.array([0.25, 0.75]),
+                0.5,
+            )
+        self.assertEqual(scored["prob_raw"].tolist(), [0.2, 0.8])
+        self.assertEqual(scored["prob_calibrated"].tolist(), [0.25, 0.75])
+        self.assertEqual(scored["nested_alarm_threshold"].tolist(), [0.5, 0.5])
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.attach_primary_predictions(scored, [0.2, 0.8], [0.2, 0.8], 0.5)
+
     def test_sampen_oracle_zero_match_and_no_second_backend(self):
         # Compatible starts only: four constants give B=1 and A=1.
         self.assertEqual(pipeline.sample_entropy([1, 1, 1, 1]), 0.0)
