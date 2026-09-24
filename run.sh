@@ -153,18 +153,39 @@ for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     fi
 done
 "$HOST_PYTHON" scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
-if [[ "$MODE" == profile ]]; then
-    printf 'RESOURCE_PROFILE_PASS run_id=%s selection=%s\n' "$RUN_ID" "$RUN_DIR/resource_profile_selection.json"
-    exit 0
-fi
-
-read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
+read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS MODEL_FIT_THREADS MODEL_WORKERS MODEL_CANDIDATES FINALIZE_MEMORY < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
-    selected = json.load(handle)["selected"]
-print(selected["cpus"], selected["memory_gb"], selected["gpus"])
+    payload = json.load(handle)
+selected = payload["selected"]
+fit = payload["fit_profile"]
+print(
+    selected["cpus"], selected["memory_gb"], selected["gpus"],
+    fit["cpus"], payload["parallel_workers"], payload["parallel_candidates"],
+    payload["finalize_memory_gb"],
+)
 PY
 )
+export SEPSIS_FIT_THREADS="$MODEL_FIT_THREADS"
+export SEPSIS_PARALLEL_WORKERS="$MODEL_WORKERS"
+export SEPSIS_PARALLEL_CANDIDATES="$MODEL_CANDIDATES"
+SELECTED_PROFILE_NAME=selected-model
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-selected-profile --profile-dir "$RUN_DIR/profiles" --selection "$RUN_DIR/resource_profile_selection.json" >/dev/null; then
+    SELECTED_PROFILE_JOB=reused
+else
+    [[ "$RESUMING" == false || ( ! -e "$RUN_DIR/profiles/$SELECTED_PROFILE_NAME.json" && ! -e "$RUN_DIR/profiles/$SELECTED_PROFILE_NAME-benchmark.json" ) ]] || {
+        echo "FAIL: invalid selected-model profile is preserved; use a fresh run ID" >&2
+        exit 1
+    }
+    SELECTED_PROFILE_JOB=$(submit_stage profile "$MODEL_CPUS" "$MODEL_MEMORY" "$MODEL_GPUS" "$PREVIOUS_JOB" "$SELECTED_PROFILE_NAME")
+    wait_job "$SELECTED_PROFILE_JOB"
+    PREVIOUS_JOB=$SELECTED_PROFILE_JOB
+    "$HOST_PYTHON" scripts/resource_provenance.py verify-selected-profile --profile-dir "$RUN_DIR/profiles" --selection "$RUN_DIR/resource_profile_selection.json"
+fi
+if [[ "$MODE" == profile ]]; then
+    printf 'RESOURCE_PROFILE_PASS run_id=%s selection=%s selected_model_job=%s\n' "$RUN_ID" "$RUN_DIR/resource_profile_selection.json" "$SELECTED_PROFILE_JOB"
+    exit 0
+fi
 if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
     MODEL_JOB=reused
 else
@@ -188,13 +209,13 @@ PY
         exit 0
     fi
     [[ "$RESULT_STATUS" == PENDING_RESOURCE_AND_FINAL_VALIDATION ]] || { echo "FAIL: finalized run has invalid result status $RESULT_STATUS" >&2; exit 1; }
-    FINALIZE_JOB=$(submit_stage promote 1 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage promote 1 "$FINALIZE_MEMORY" 0 "$PREVIOUS_JOB")
 else
     if [[ "$RESUMING" == true ]] && [[ -e "$RUN_DIR/metrics.json" || -e "$RUN_DIR/result_manifest.json" ]]; then
         echo "FAIL: partial finalize artifacts are preserved; use a fresh run ID" >&2
         exit 1
     fi
-    FINALIZE_JOB=$(submit_stage finalize 1 "$MODEL_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage finalize 1 "$FINALIZE_MEMORY" 0 "$PREVIOUS_JOB")
 fi
 wait_job "$FINALIZE_JOB"
 printf 'SCIENTIFIC_RUN_PASS run_id=%s test_job=%s prepare_job=%s model_job=%s finalize_job=%s run_dir=%s\n' \

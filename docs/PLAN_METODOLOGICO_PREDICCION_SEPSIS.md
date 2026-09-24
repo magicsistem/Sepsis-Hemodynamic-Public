@@ -256,8 +256,11 @@ registra el resultado negativo y no se añade una red mayor.
 6. promoción sólo después del manifiesto de recursos y validación final.
 
 Todo cálculo científico corre en `compute-0-2`; `compute-0-1` está excluido.
-Límites: 32 CPU, 64 GB y una A100 de 40 GB. Se selecciona el perfil menor dentro
-del 5 % del más rápido; GPU sólo con >5 % de ventaja total, al menos tres muestras
+Límites por job: 64 CPU, 64 GB y una A100 de 40 GB. Los perfiles 8/16/32 miden
+los recursos óptimos por fit; si se selecciona CPU, outer folds y transportes
+independientes se ejecutan concurrentemente sólo hasta donde permitan tanto el
+límite de CPU como la memoria medida por fit más 20 %. Se selecciona el perfil
+por fit menor dentro del 5 % del más rápido; GPU sólo con >5 % de ventaja total, al menos tres muestras
 activas y utilización GPU activa media >50 %. CPU requiere eficiencia >50 %
 durante la ventana de cómputo, separada de I/O y startup. RAM es pico
 medido/estimado +20 %, redondeada a 2 GB; 64 GB es un techo, no un objetivo.
@@ -273,6 +276,19 @@ exportarla; la frontera corregida carga sólo las cinco columnas necesarias para
 folds y flujo de cohorte. El nuevo perfil debe confirmar el margen antes del run
 completo. El muestreo GPU se hace cada segundo para no perder fits cortos. No se
 llena memoria artificialmente.
+
+Dentro de cada fold, los dos candidatos XGBoost independientes también pueden
+ejecutarse concurrentemente con la misma restricción total. Con el perfil CPU16
+y 32 GB medido, dos folds por dos candidatos usan como máximo 64 CPU y 64 GB;
+las fases sin candidatos simultáneos usan menos recursos de forma natural. El
+orden de los resultados permanece determinista y cualquier excepción en un
+worker aborta el stage completo. BLAS/OpenMP y XGBoost reciben los threads del
+perfil por fit, no todos los CPU del job, para impedir oversubscription.
+
+Antes del modelado completo, el perfil concurrente seleccionado se vuelve a
+medir con esa concurrencia exacta. El gate exige >50 % de eficiencia CPU en la
+fase XGBoost activa y un RSS inferior a la RAM solicitada; si falla, `run.sh`
+termina sin promover resultados parciales.
 
 La mezcla del benchmark aproxima la carga planificada: 10/2 = 5 fits XGBoost
 por ajuste Koopman frente a 278/49 = 5.67 en el run completo. Un benchmark de

@@ -87,23 +87,42 @@ def benchmark(run_dir: Path, output: Path) -> dict:
     gpu = pipeline.gpu_runtime()
     if os.environ.get("REQUIRE_GPU", "false").lower() == "true" and not gpu["available"]:
         raise pipeline.PipelineError(f"GPU benchmark requires a usable device: {gpu['reason']}")
-    xgboost_start = time.perf_counter()
-    probability = None
-    for fit_index in range(BENCHMARK_XGBOOST_FITS):
+    fit_matrix = pipeline.matrix(decisions, columns)
+
+    def fit_model(fit_index: int) -> np.ndarray:
         model = pipeline.xgb_model(
             pipeline.MODEL_CANDIDATES[0],
             pipeline.SEED + fit_index,
             gpu,
             n_estimators=BENCHMARK_XGBOOST_ESTIMATORS,
         )
-        pipeline.fit_xgb(model, decisions, columns, target_column=onset.TARGET_COLUMN)
-        probability = model.predict_proba(pipeline.matrix(decisions, columns))[:, 1]
+        pipeline.fit_xgb(
+            model,
+            decisions,
+            columns,
+            target_column=onset.TARGET_COLUMN,
+            train_matrix=fit_matrix,
+        )
+        return model.predict_proba(fit_matrix)[:, 1]
+
+    xgboost_start = time.perf_counter()
+    xgboost_cpu_start = time.process_time()
+    concurrent_xgboost_fits = min(
+        BENCHMARK_XGBOOST_FITS,
+        pipeline.parallel_model_workers(gpu, BENCHMARK_XGBOOST_FITS)
+        * pipeline.parallel_candidate_workers(gpu, len(pipeline.MODEL_CANDIDATES)),
+    )
+    probabilities = pipeline.ordered_parallel_map(
+        fit_model, range(BENCHMARK_XGBOOST_FITS), concurrent_xgboost_fits
+    )
     xgboost_seconds = time.perf_counter() - xgboost_start
+    xgboost_cpu_seconds = time.process_time() - xgboost_cpu_start
+    probability = probabilities[-1] if probabilities else None
     if probability is None or not np.isfinite(probability).all():
         raise pipeline.PipelineError("Resource benchmark produced invalid probabilities")
     compute_seconds = time.perf_counter() - compute_start
     compute_cpu_seconds = time.process_time() - compute_cpu_start
-    cpus = pipeline.allocated_cpu_count()
+    cpus = pipeline.allocated_total_cpu_count()
     state_width = min(len(supported), onset.KOOPMAN_POLICY["maximum_signals"]) * 2
     quadratic_width = state_width + state_width * (state_width + 1) // 2
     full_feature_gb = float(features.memory_usage(index=True, deep=True).sum() / 1024 ** 3)
@@ -141,8 +160,19 @@ def benchmark(run_dir: Path, output: Path) -> dict:
         "koopman_fit_seconds": fit_seconds,
         "koopman_training_transition_counts": transition_counts,
         "xgboost_fits": BENCHMARK_XGBOOST_FITS,
+        "concurrent_xgboost_fits": concurrent_xgboost_fits,
+        "fit_threads": pipeline.allocated_cpu_count(),
+        "parallel_workers": pipeline.parallel_model_workers(
+            gpu, BENCHMARK_XGBOOST_FITS
+        ),
+        "parallel_candidates": pipeline.parallel_candidate_workers(
+            gpu, len(pipeline.MODEL_CANDIDATES)
+        ),
         "xgboost_estimators_per_fit": BENCHMARK_XGBOOST_ESTIMATORS,
         "xgboost_fit_predict_seconds": xgboost_seconds,
+        "xgboost_cpu_seconds": xgboost_cpu_seconds,
+        "xgboost_active_cpu_efficiency": xgboost_cpu_seconds
+        / (xgboost_seconds * cpus),
         "planned_full_xgboost_fits": pipeline.MODEL_POLICY[
             "planned_full_xgboost_fits"
         ],

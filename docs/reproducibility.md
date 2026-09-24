@@ -73,11 +73,17 @@ transport, not independent external validation.
 feasible CPU/GPU profiles on a fixed 4,000-patient subset with two Koopman fits
 and ten 200-tree XGBoost fits (a 5:1 mix versus the planned 278:49 mix),
 selects the smallest eligible profile within 5% of the
-fastest, and links model/finalize jobs with `afterok`. CPU eligibility requires
+fastest, then runs independent outer folds, model candidates, and transports
+concurrently within the measured per-fit RAM plus 20% and the total job caps.
+Before the full model stage, the selected concurrent layout is benchmarked
+again with its exact fit/fold/candidate concurrency. The run aborts unless the
+active XGBoost phase exceeds 50% of the CPU allocation and remains within the
+selected memory request.
+It links model/finalize jobs with `afterok`. CPU eligibility requires
 more than 50% active compute efficiency. GPU eligibility requires more than
 50% mean utilization across at least three active one-second samples and more
 than 5% total speedup over the best eligible CPU profile. The bounds are 32
-CPU, 64 GB RAM, and one A100 40 GB; RAM is requested from measured/estimated
+CPU per fit, 64 CPU and 64 GB RAM per job, and one A100 40 GB; RAM is requested from measured/estimated
 peak plus 20%. Every stage records measured CPU, RAM, GPU, run ID, commit, and
 source inventory. Promotion
 independently reconciles those records and all scientific products, rejects

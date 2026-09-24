@@ -15,6 +15,26 @@ set -euo pipefail
 : "${REQUESTED_CPUS:?REQUESTED_CPUS must be supplied by run.sh}"
 : "${REQUESTED_MEMORY_GB:?REQUESTED_MEMORY_GB must be supplied by run.sh}"
 : "${REQUESTED_GPUS:?REQUESTED_GPUS must be supplied by run.sh}"
+FIT_THREADS="$REQUESTED_CPUS"
+PARALLEL_WORKERS=1
+PARALLEL_CANDIDATES=1
+if [[ "$PIPELINE_STAGE" == model || ( "$PIPELINE_STAGE" == profile && "${PROFILE_NAME:-}" == selected-model ) ]]; then
+    FIT_THREADS=${SEPSIS_FIT_THREADS:?SEPSIS_FIT_THREADS must be supplied for model}
+    PARALLEL_WORKERS=${SEPSIS_PARALLEL_WORKERS:?SEPSIS_PARALLEL_WORKERS must be supplied for model}
+    PARALLEL_CANDIDATES=${SEPSIS_PARALLEL_CANDIDATES:?SEPSIS_PARALLEL_CANDIDATES must be supplied for model}
+    [[ "$FIT_THREADS" =~ ^[1-9][0-9]*$ && "$PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ && "$PARALLEL_CANDIDATES" =~ ^[1-9][0-9]*$ ]] || {
+        echo "FAIL: model parallelism values must be positive integers" >&2
+        exit 1
+    }
+    (( FIT_THREADS * PARALLEL_WORKERS * PARALLEL_CANDIDATES <= REQUESTED_CPUS )) || {
+        echo "FAIL: model workers exceed allocated CPUs" >&2
+        exit 1
+    }
+    [[ "$REQUESTED_GPUS" == 0 || ( "$PARALLEL_WORKERS" == 1 && "$PARALLEL_CANDIDATES" == 1 ) ]] || {
+        echo "FAIL: one GPU cannot run concurrent model workers" >&2
+        exit 1
+    }
+fi
 CONTAINER=${SEPSIS_CONTAINER:-/home/miguel.benavides__yachaytech.edu.ec/pytorch_24.01-py3.sif}
 NODE_NAME=$(hostname -s)
 [[ "$NODE_NAME" == compute-0-2 ]] || { echo "FAIL: scientific work is restricted to compute-0-2" >&2; exit 1; }
@@ -60,10 +80,10 @@ else
     REQUIRE_GPU=false
 fi
 
-export OMP_NUM_THREADS="$REQUESTED_CPUS"
-export MKL_NUM_THREADS="$REQUESTED_CPUS"
-export OPENBLAS_NUM_THREADS="$REQUESTED_CPUS"
-export NUMEXPR_NUM_THREADS="$REQUESTED_CPUS"
+export OMP_NUM_THREADS="$FIT_THREADS"
+export MKL_NUM_THREADS="$FIT_THREADS"
+export OPENBLAS_NUM_THREADS="$FIT_THREADS"
+export NUMEXPR_NUM_THREADS="$FIT_THREADS"
 set +e
 /usr/bin/time -f 'elapsed_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nmax_rss_kb=%M\nexit_status=%x' -o "$TIME_FILE" \
     "$RUNTIME" exec "${CONTAINER_GPU_ARGS[@]}" "$CONTAINER" env \
@@ -71,8 +91,10 @@ set +e
         PROJECT_DIR="$PROJECT_DIR" RUN_ID="$RUN_ID" RUN_DIR="$RUN_DIR" \
         PIPELINE_STAGE="$PIPELINE_STAGE" PROFILE_NAME="${PROFILE_NAME:-}" \
         REQUIRE_GPU="$REQUIRE_GPU" SLURM_CPUS_PER_TASK="$REQUESTED_CPUS" \
-        OMP_NUM_THREADS="$REQUESTED_CPUS" MKL_NUM_THREADS="$REQUESTED_CPUS" \
-        OPENBLAS_NUM_THREADS="$REQUESTED_CPUS" NUMEXPR_NUM_THREADS="$REQUESTED_CPUS" \
+        SEPSIS_FIT_THREADS="$FIT_THREADS" SEPSIS_PARALLEL_WORKERS="$PARALLEL_WORKERS" \
+        SEPSIS_PARALLEL_CANDIDATES="$PARALLEL_CANDIDATES" \
+        OMP_NUM_THREADS="$FIT_THREADS" MKL_NUM_THREADS="$FIT_THREADS" \
+        OPENBLAS_NUM_THREADS="$FIT_THREADS" NUMEXPR_NUM_THREADS="$FIT_THREADS" \
         SOURCE_GIT_COMMIT="$SOURCE_GIT_COMMIT" SOURCE_GIT_DIRTY="$SOURCE_GIT_DIRTY" \
         SOURCE_INVENTORY_SHA256="$SOURCE_INVENTORY_SHA256" \
         SOURCE_CONTAINER_PATH="$CONTAINER" SOURCE_CONTAINER_SHA256="$CONTAINER_SHA256" \

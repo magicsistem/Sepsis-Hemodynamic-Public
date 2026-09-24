@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 
-CPU_CAP = 32
+CPU_CAP = 64
 MEMORY_CAP_GB = 64
 GPU_CAP = 1
 MIN_ACTIVE_CPU_EFFICIENCY = 0.50
@@ -89,6 +89,64 @@ def verify_profile(args):
     ):
         raise ResourceError(f"Invalid profile evidence for {args.name}")
     return {"status": "PASS", "profile": args.name}
+
+
+def verify_selected_profile(args):
+    selection = json.loads(args.selection.read_text(encoding="utf-8"))
+    path = args.profile_dir / "selected-model.json"
+    benchmark_path = args.profile_dir / "selected-model-benchmark.json"
+    if not path.is_file() or not benchmark_path.is_file():
+        raise ResourceError("Selected model concurrency profile is missing")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    selected = selection.get("selected", {})
+    fit = selection.get("fit_profile", {})
+    workers = selection.get("parallel_workers")
+    candidates = selection.get("parallel_candidates")
+    expected_concurrent = (
+        workers * candidates
+        if isinstance(workers, int)
+        and not isinstance(workers, bool)
+        and isinstance(candidates, int)
+        and not isinstance(candidates, bool)
+        else None
+    )
+    gpu = payload.get("measured", {}).get("gpu", {})
+    if (
+        selection.get("status") != "PASS"
+        or payload.get("stage") != "selected-model"
+        or payload.get("status") != "PASS"
+        or payload.get("hostname") != "compute-0-2"
+        or payload.get("requested") != selected
+        or payload.get("run_id") != selection.get("run_id")
+        or payload.get("source_git_commit") != selection.get("source_git_commit")
+        or payload.get("source_inventory_sha256")
+        != selection.get("source_inventory_sha256")
+        or payload.get("benchmark") != benchmark
+        or benchmark.get("status") != "PASS"
+        or benchmark.get("fit_threads") != fit.get("cpus")
+        or benchmark.get("parallel_workers") != workers
+        or benchmark.get("parallel_candidates") != candidates
+        or expected_concurrent is None
+        or benchmark.get("concurrent_xgboost_fits") != expected_concurrent
+        or payload.get("measured", {}).get("max_rss_gb", math.inf)
+        > selected.get("memory_gb", 0)
+    ):
+        raise ResourceError("Selected model concurrency profile does not match its resource selection")
+    if selected.get("gpus") == 0:
+        if benchmark.get("xgboost_active_cpu_efficiency", 0) <= MIN_ACTIVE_CPU_EFFICIENCY:
+            raise ResourceError("Selected concurrent XGBoost phase did not exceed 50% active CPU efficiency")
+    elif (
+        gpu.get("active_samples", 0) < MIN_ACTIVE_GPU_SAMPLES
+        or gpu.get("mean_active_utilization_percent", 0)
+        <= MIN_ACTIVE_GPU_UTILIZATION_PERCENT
+    ):
+        raise ResourceError("Selected GPU profile did not meet active utilization gates")
+    return {
+        "status": "PASS",
+        "profile": "selected-model",
+        "active_cpu_efficiency": benchmark.get("xgboost_active_cpu_efficiency"),
+    }
 
 
 def parse_time(path):
@@ -179,7 +237,9 @@ def profile_key(payload):
 
 
 def select_profile(args):
-    paths = [path for path in sorted(args.profile_dir.glob("*.json")) if not path.stem.endswith("-benchmark")]
+    paths = [args.profile_dir / f"{kind}{cpu}.json" for kind in ("cpu", "gpu") for cpu in (8, 16, 32)]
+    if any(not path.is_file() for path in paths):
+        raise ResourceError("All six CPU/GPU benchmark profiles must exist")
     profiles = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     if len(profiles) != 6 or any(profile.get("status") != "PASS" for profile in profiles):
         raise ResourceError("All six CPU/GPU benchmark profiles must pass")
@@ -260,17 +320,46 @@ def select_profile(args):
     requested_memory = max(2, int(math.ceil((peak * 1.20) / 2) * 2))
     if requested_memory > MEMORY_CAP_GB:
         raise ResourceError("Measured/estimated memory plus 20% exceeds the approved 64 GB cap")
+    fit_profile = {
+        "cpus": selected["requested"]["cpus"],
+        "memory_gb": requested_memory,
+        "gpus": selected["requested"]["gpus"],
+    }
+    parallel_workers = 1
+    if fit_profile["gpus"] == 0:
+        parallel_workers = min(
+            5,
+            CPU_CAP // fit_profile["cpus"],
+            MEMORY_CAP_GB // fit_profile["memory_gb"],
+        )
+    if parallel_workers < 1:
+        raise ResourceError("Measured per-fit resources leave no valid model worker")
+    parallel_candidates = 1
+    if fit_profile["gpus"] == 0:
+        parallel_candidates = min(
+            2,
+            CPU_CAP // (fit_profile["cpus"] * parallel_workers),
+        )
+    if parallel_candidates < 1:
+        raise ResourceError("Measured fold workers leave no valid candidate worker")
+    model_resources = {
+        "cpus": fit_profile["cpus"] * parallel_workers * parallel_candidates,
+        "memory_gb": fit_profile["memory_gb"] * parallel_workers,
+        "gpus": fit_profile["gpus"],
+    }
     payload = {
         "status": "PASS",
         "selection_rule": (
             "smallest profile within 5% of fastest; CPU active compute efficiency >50%; "
-            "GPU mean active utilization >50% with >=3 active samples and >5% speedup"
+            "GPU mean active utilization >50% with >=3 active samples and >5% speedup; "
+            "independent CPU folds run concurrently only while measured per-fit CPU and "
+            "memory plus 20% remain within the 64 CPU/64 GB job caps"
         ),
-        "selected": {
-            "cpus": selected["requested"]["cpus"],
-            "memory_gb": requested_memory,
-            "gpus": selected["requested"]["gpus"],
-        },
+        "selected": model_resources,
+        "fit_profile": fit_profile,
+        "parallel_workers": parallel_workers,
+        "parallel_candidates": parallel_candidates,
+        "finalize_memory_gb": requested_memory,
         "selected_profile_job_id": selected["slurm_job_id"],
         "selected_profile_elapsed_seconds": selected["measured"]["elapsed_seconds"],
         "selected_profile_cpu_efficiency": selected["measured"]["cpu_efficiency"],
@@ -318,12 +407,22 @@ def aggregate(args):
     if profile.get("status") != "PASS":
         raise ResourceError("Resource profile selection did not pass")
     selected = profile.get("selected", {})
+    selected_profile_path = args.profile_selection.parent / "profiles" / "selected-model.json"
+    selected_benchmark_path = (
+        args.profile_selection.parent / "profiles" / "selected-model-benchmark.json"
+    )
+    if not selected_profile_path.is_file() or not selected_benchmark_path.is_file():
+        raise ResourceError("Selected model concurrency evidence is missing")
+    selected_validation = json.loads(selected_profile_path.read_text(encoding="utf-8"))
+    selected_benchmark = json.loads(selected_benchmark_path.read_text(encoding="utf-8"))
     stage_context = next(iter(stages.values()))
     if (
         stages["prepare"]["requested"] != {"cpus": 1, "memory_gb": 10, "gpus": 0}
         or stages["model"]["requested"] != selected
         or stages["finalize"]["requested"] != {
-            "cpus": 1, "memory_gb": selected.get("memory_gb"), "gpus": 0,
+            "cpus": 1,
+            "memory_gb": profile.get("finalize_memory_gb"),
+            "gpus": 0,
         }
         or len({stage["run_id"] for stage in stages.values()}) != 1
         or len({stage["source_git_commit"] for stage in stages.values()}) != 1
@@ -331,12 +430,21 @@ def aggregate(args):
         or profile.get("run_id") != stage_context.get("run_id")
         or profile.get("source_git_commit") != stage_context.get("source_git_commit")
         or profile.get("source_inventory_sha256") != stage_context.get("source_inventory_sha256")
+        or selected_validation.get("status") != "PASS"
+        or selected_validation.get("requested") != selected
+        or selected_validation.get("benchmark") != selected_benchmark
+        or selected_validation.get("run_id") != stage_context.get("run_id")
+        or selected_validation.get("source_git_commit")
+        != stage_context.get("source_git_commit")
+        or selected_validation.get("source_inventory_sha256")
+        != stage_context.get("source_inventory_sha256")
     ):
         raise ResourceError("Stage resources do not match the selected profile and source context")
     payload = {
         "status": "PASS",
         "caps": {"maximum_cpus": CPU_CAP, "maximum_memory_gb": MEMORY_CAP_GB, "maximum_gpus": GPU_CAP},
         "profile_selection": profile,
+        "selected_model_validation": selected_validation,
         "stages": stages,
         "no_artificial_memory_fill": True,
     }
@@ -385,6 +493,9 @@ def parser():
     profile.add_argument("--run-id", required=True)
     profile.add_argument("--git-commit", required=True)
     profile.add_argument("--source-inventory", required=True)
+    selected_profile = commands.add_parser("verify-selected-profile")
+    selected_profile.add_argument("--profile-dir", type=Path, required=True)
+    selected_profile.add_argument("--selection", type=Path, required=True)
     return root
 
 
@@ -397,6 +508,7 @@ def main():
             "aggregate": aggregate,
             "verify-stage": verify_stage,
             "verify-profile": verify_profile,
+            "verify-selected-profile": verify_selected_profile,
         }
         payload = commands[args.command](args)
     except ResourceError as exc:

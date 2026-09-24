@@ -88,3 +88,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.MethodologyDocumentTests -v && printf 'G21_REVIEWER_REQUIREMENTS_PASS\n'
   EXPECT: G21_REVIEWER_REQUIREMENTS_PASS
   EVIDENCE: C0--C3 ablation plus three seeds and three training-balance policies are implemented as non-selective sensitivity artifacts. Journal citations/title/Abstract/contributions/Discussion/Conclusion/future-work/special-issue alignment remain explicitly DEFERRED_TO_MANUSCRIPT_PHASE. Current exact-commit CEDIA suite and final artifacts pending.
+
+- [ ] G22: independent outer folds, model candidates, and transports execute concurrently without oversubscription, nondeterministic ordering, source leakage, or exceeding 64 CPU/64 GB
+  CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G22_BOUNDED_PARALLELISM_PASS\n'
+  EXPECT: G22_BOUNDED_PARALLELISM_PASS
+  EVIDENCE: ordered stdlib thread pools, one cached float32 matrix per split, explicit threads*folds*candidates CPU arithmetic, process-global BLAS-limit locking, and a selected-layout CEDIA benchmark gate are implemented; exact-container verification remains pending before replacing the active sequential run.

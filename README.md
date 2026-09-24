@@ -47,8 +47,11 @@ hash- and source-bound stage checkpoints and refuses incompatible partials.
 - SourceSet A/B transport is internal public-data transport, not external
   validation. MIMIC/eICU external validation remains unavailable without the
   required credentialed cohorts.
-- CPU/GPU profiles are measured before the model stage; selection is bounded
-  to 32 CPU, 64 GB RAM, and one A100 40 GB. A CPU profile must exceed 50%
+- CPU/GPU profiles are measured before the model stage; each fit is bounded to
+  32 CPU and independent folds/candidates may share one job up to 64 CPU/64 GB RAM. The
+  selected concurrent layout is benchmarked once more before model execution
+  and must exceed 50% active XGBoost CPU efficiency without exceeding RAM. The
+  GPU bound is one A100 40 GB. A CPU profile must exceed 50%
   active compute efficiency; a GPU profile must exceed 50% mean utilization
   over at least three active one-second samples and improve total time by more
   than 5%. RAM is measured/estimated peak plus 20%, never artificial fill.

@@ -159,6 +159,51 @@ class KoopmanOracleTests(unittest.TestCase):
         self.assertTrue(math.isnan(state[2, 0]))
         self.assertEqual((state[3, 0], state[3, 1]), (20.0, 1.0))
 
+    def test_vectorized_multisignal_state_and_delta_oracle(self):
+        frame = patient(
+            "A:multi", [1, 2, 4, 5], [0, 0, 0, 0], math.nan,
+            "nonseptic", [10.0, math.nan, 16.0, 19.0],
+        )
+        frame["raw__MAP"] = [5.0, 7.0, math.nan, 11.0]
+        state, previous = koopman._previous_state(frame, ("HR", "MAP"))
+        np.testing.assert_allclose(
+            state,
+            [
+                [math.nan, math.nan, math.nan, math.nan],
+                [10.0, 1.0, 5.0, 1.0],
+                [10.0, 3.0, 7.0, 2.0],
+                [16.0, 1.0, 7.0, 3.0],
+            ],
+            equal_nan=True,
+        )
+        self.assertEqual(previous.tolist(), [False, True, True, True])
+        transformed = koopman.transform_deltas(
+            frame, ("HR", "MAP"), ("HR", "MAP")
+        )
+        np.testing.assert_allclose(
+            transformed["causal_delta__HR"],
+            [math.nan, math.nan, 6.0, 3.0], equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            transformed["causal_slope__HR"],
+            [math.nan, math.nan, 2.0, 3.0], equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            transformed["causal_delta__MAP"],
+            [math.nan, 2.0, math.nan, 4.0], equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            transformed["causal_slope__MAP"],
+            [math.nan, 2.0, math.nan, 4.0 / 3.0], equal_nan=True,
+        )
+        rolling_frame = frame.iloc[:3].copy()
+        rolling_frame["ICULOS"] = [1, 8, 9]
+        mean, maximum = koopman._rolling_energy(
+            rolling_frame, np.asarray([1.0, 2.0, 3.0]), 8
+        )
+        np.testing.assert_allclose(mean, [1.0, 1.5, 2.5])
+        np.testing.assert_allclose(maximum, [1.0, 2.0, 3.0])
+
 
 def primary_oof() -> pd.DataFrame:
     frames = []
@@ -222,6 +267,33 @@ class NestedPolicyTests(unittest.TestCase):
         self.assertEqual(set(inner_oof["Patient_ID"]), set(train["Patient_ID"]))
         self.assertFalse(inner_oof.duplicated(["Patient_ID", "ICULOS"]).any())
         self.assertEqual(len(detail), len(pipeline.MODEL_CANDIDATES) * pipeline.MODEL_POLICY["inner_folds"])
+
+    def test_parallel_worker_budget_and_order_are_fail_closed(self):
+        cpu = {"available": False}
+        with mock.patch.dict(
+            pipeline.os.environ,
+            {
+                "SLURM_CPUS_PER_TASK": "64",
+                "SEPSIS_FIT_THREADS": "16",
+                "SEPSIS_PARALLEL_WORKERS": "2",
+                "SEPSIS_PARALLEL_CANDIDATES": "2",
+            },
+            clear=True,
+        ):
+            self.assertEqual(pipeline.allocated_total_cpu_count(), 64)
+            self.assertEqual(pipeline.allocated_cpu_count(), 16)
+            self.assertEqual(pipeline.parallel_candidate_workers(cpu, 2), 2)
+            self.assertEqual(pipeline.parallel_model_workers(cpu, 5), 2)
+            self.assertEqual(
+                pipeline.ordered_parallel_map(lambda value: value * 2, [3, 1, 2], 2),
+                [6, 2, 4],
+            )
+            pipeline.os.environ["SEPSIS_PARALLEL_WORKERS"] = "3"
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.parallel_model_workers(cpu, 5)
+            pipeline.os.environ["SEPSIS_PARALLEL_WORKERS"] = "2"
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.parallel_model_workers({"available": True}, 5)
 
     def test_calibration_and_threshold_use_inner_oof_contract(self):
         inner = primary_oof()
@@ -658,9 +730,101 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 git_commit="a" * 40, source_inventory="b" * 64,
             ))
             self.assertEqual(selected["selected"], {"cpus": 8, "memory_gb": 32, "gpus": 1})
+            self.assertEqual(selected["fit_profile"], {"cpus": 8, "memory_gb": 32, "gpus": 1})
+            self.assertEqual(selected["parallel_workers"], 1)
+            self.assertEqual(selected["parallel_candidates"], 1)
             self.assertEqual(selected["selected_profile_active_gpu_samples"], 5)
-            self.assertLessEqual(selected["selected"]["cpus"], 32)
+            self.assertLessEqual(selected["selected"]["cpus"], 64)
             self.assertLessEqual(selected["selected"]["memory_gb"], 64)
+
+    def test_cpu_profile_parallelism_is_bounded_by_measured_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles = [
+                ("cpu8", 8, 0, 10.0, 0.90),
+                ("cpu16", 16, 0, 8.0, 0.85),
+                ("cpu32", 32, 0, 7.8, 0.82),
+                ("gpu8", 8, 1, 7.2, 0.50),
+                ("gpu16", 16, 1, 7.0, 0.50),
+                ("gpu32", 32, 1, 7.1, 0.50),
+            ]
+            for name, cpus, gpus, elapsed, efficiency in profiles:
+                payload = {
+                    "stage": name, "status": "PASS", "hostname": "compute-0-2",
+                    "partition": "gpu" if gpus else "cpu", "slurm_job_id": name,
+                    "run_id": "run", "source_git_commit": "a" * 40,
+                    "source_inventory_sha256": "b" * 64,
+                    "requested": {"cpus": cpus, "memory_gb": 32, "gpus": gpus},
+                    "measured": {
+                        "elapsed_seconds": elapsed, "cpu_efficiency": efficiency,
+                        "max_rss_gb": 8.0,
+                        "gpu": {
+                            "active_samples": 2 if gpus else 0,
+                            "mean_active_utilization_percent": 40.0 if gpus else None,
+                        },
+                    },
+                    "benchmark": {
+                        "status": "PASS", "estimated_full_peak_gb": 25.5,
+                        "active_cpu_efficiency": efficiency,
+                    },
+                }
+                (root / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+            selected = resource_provenance.select_profile(Namespace(
+                profile_dir=root, output=root / "selection.json", run_id="run",
+                git_commit="a" * 40, source_inventory="b" * 64,
+            ))
+            self.assertEqual(selected["fit_profile"], {"cpus": 16, "memory_gb": 32, "gpus": 0})
+            self.assertEqual(selected["parallel_workers"], 2)
+            self.assertEqual(selected["parallel_candidates"], 2)
+            self.assertEqual(selected["selected"], {"cpus": 64, "memory_gb": 64, "gpus": 0})
+            self.assertEqual(selected["finalize_memory_gb"], 32)
+
+    def test_selected_parallel_profile_requires_measured_majority_cpu_use(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles = root / "profiles"
+            profiles.mkdir()
+            selection = {
+                "status": "PASS", "run_id": "run",
+                "source_git_commit": "a" * 40,
+                "source_inventory_sha256": "b" * 64,
+                "selected": {"cpus": 64, "memory_gb": 64, "gpus": 0},
+                "fit_profile": {"cpus": 16, "memory_gb": 32, "gpus": 0},
+                "parallel_workers": 2, "parallel_candidates": 2,
+            }
+            selection_path = root / "selection.json"
+            selection_path.write_text(json.dumps(selection), encoding="utf-8")
+            benchmark = {
+                "status": "PASS", "fit_threads": 16,
+                "parallel_workers": 2, "parallel_candidates": 2,
+                "concurrent_xgboost_fits": 4,
+                "xgboost_active_cpu_efficiency": 0.55,
+            }
+            (profiles / "selected-model-benchmark.json").write_text(
+                json.dumps(benchmark), encoding="utf-8"
+            )
+            profile = {
+                "stage": "selected-model", "status": "PASS",
+                "hostname": "compute-0-2", "partition": "cpu",
+                "run_id": "run", "source_git_commit": "a" * 40,
+                "source_inventory_sha256": "b" * 64,
+                "requested": selection["selected"],
+                "measured": {"max_rss_gb": 40.0, "gpu": {}},
+                "benchmark": benchmark,
+            }
+            profile_path = profiles / "selected-model.json"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            args = Namespace(profile_dir=profiles, selection=selection_path)
+            self.assertEqual(
+                resource_provenance.verify_selected_profile(args)["status"], "PASS"
+            )
+            profile["benchmark"]["xgboost_active_cpu_efficiency"] = 0.50
+            (profiles / "selected-model-benchmark.json").write_text(
+                json.dumps(profile["benchmark"]), encoding="utf-8"
+            )
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            with self.assertRaises(resource_provenance.ResourceError):
+                resource_provenance.verify_selected_profile(args)
 
     def test_resource_aggregate_binds_selected_profile_and_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -683,8 +847,23 @@ class ResourceOrchestrationTests(unittest.TestCase):
             selection = root / "selection.json"
             selection.write_text(json.dumps({
                 "status": "PASS", "selected": selected, "run_id": "run",
+                "finalize_memory_gb": 12,
                 "source_git_commit": "a" * 40,
                 "source_inventory_sha256": "b" * 64,
+            }), encoding="utf-8")
+            profiles = root / "profiles"
+            profiles.mkdir()
+            benchmark = {"status": "PASS"}
+            (profiles / "selected-model-benchmark.json").write_text(
+                json.dumps(benchmark), encoding="utf-8"
+            )
+            (profiles / "selected-model.json").write_text(json.dumps({
+                "stage": "selected-model", "status": "PASS",
+                "hostname": "compute-0-2", "partition": "gpu",
+                "requested": selected, "run_id": "run",
+                "source_git_commit": "a" * 40,
+                "source_inventory_sha256": "b" * 64,
+                "benchmark": benchmark,
             }), encoding="utf-8")
             args = Namespace(
                 resources_dir=resources, profile_selection=selection,
@@ -718,7 +897,13 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn("set -euo pipefail", job)
         self.assertIn("host_python=unavailable", job)
         self.assertIn('"$RUNTIME" exec', job)
-        self.assertEqual(resource_provenance.CPU_CAP, 32)
+        self.assertIn('export SEPSIS_FIT_THREADS="$MODEL_FIT_THREADS"', entrypoint)
+        self.assertIn('export SEPSIS_PARALLEL_WORKERS="$MODEL_WORKERS"', entrypoint)
+        self.assertIn('export SEPSIS_PARALLEL_CANDIDATES="$MODEL_CANDIDATES"', entrypoint)
+        self.assertIn("verify-selected-profile", entrypoint)
+        self.assertIn("selected-model", job)
+        self.assertIn('FIT_THREADS * PARALLEL_WORKERS * PARALLEL_CANDIDATES <= REQUESTED_CPUS', job)
+        self.assertEqual(resource_provenance.CPU_CAP, 64)
         self.assertEqual(resource_provenance.MEMORY_CAP_GB, 64)
         self.assertEqual(resource_provenance.GPU_CAP, 1)
         self.assertEqual(resource_provenance.MIN_ACTIVE_CPU_EFFICIENCY, 0.50)

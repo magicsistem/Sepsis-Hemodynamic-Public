@@ -18,6 +18,7 @@ import tempfile
 import warnings
 import zipfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -39,7 +40,7 @@ from src import onset_koopman as onset
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
 
-PIPELINE_VERSION = "scientific-pipeline-v6-direct-onset-koopman-robustness"
+PIPELINE_VERSION = "scientific-pipeline-v7-bounded-fold-parallelism"
 SEED = 20260906
 OFFICIAL_UTILITY_SHA256 = "26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5"
 DATA_POLICY = {
@@ -87,8 +88,11 @@ MODEL_POLICY = {
     "candidates": MODEL_CANDIDATES,
     "early_stopping_max_estimators": 600,
     "early_stopping_rounds": 30,
-    "xgboost_threads": "SLURM_CPUS_PER_TASK_or_os_cpu_count_capped_at_32",
-    "maximum_cpu_threads": 32,
+    "xgboost_threads": "SEPSIS_FIT_THREADS_or_SLURM_CPUS_PER_TASK_capped_at_32",
+    "maximum_fit_threads": 32,
+    "maximum_total_cpu_threads": 64,
+    "maximum_parallel_workers": 5,
+    "maximum_parallel_candidates": 2,
     "planned_full_xgboost_fits": 278,
     "planned_full_koopman_fits": 49,
     "xgboost_objective": "binary:logistic",
@@ -645,9 +649,9 @@ def xgb_backend(gpu: dict[str, Any]) -> dict[str, str]:
     return {"tree_method": "hist", "device": "cuda"} if major >= 2 else {"tree_method": "gpu_hist", "predictor": "gpu_predictor"}
 
 
-def allocated_cpu_count() -> int:
+def allocated_total_cpu_count() -> int:
     raw = os.environ.get("SLURM_CPUS_PER_TASK")
-    maximum = int(MODEL_POLICY["maximum_cpu_threads"])
+    maximum = int(MODEL_POLICY["maximum_total_cpu_threads"])
     if raw is None:
         return min(int(os.cpu_count() or 1), maximum)
     try:
@@ -655,8 +659,78 @@ def allocated_cpu_count() -> int:
     except ValueError as exc:
         raise PipelineError("SLURM_CPUS_PER_TASK must be an integer") from exc
     if requested < 1 or requested > maximum:
-        raise PipelineError(f"Allocated CPU count must be between 1 and {maximum}; got {requested}")
+        raise PipelineError(f"Total allocated CPU count must be between 1 and {maximum}; got {requested}")
     return requested
+
+
+def allocated_cpu_count() -> int:
+    total = allocated_total_cpu_count()
+    raw = os.environ.get("SEPSIS_FIT_THREADS")
+    maximum = int(MODEL_POLICY["maximum_fit_threads"])
+    if raw is None:
+        return min(total, maximum)
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise PipelineError("SEPSIS_FIT_THREADS must be an integer") from exc
+    if requested < 1 or requested > min(total, maximum):
+        raise PipelineError(
+            f"Per-fit CPU count must be between 1 and {min(total, maximum)}; got {requested}"
+        )
+    return requested
+
+
+def parallel_model_workers(gpu: dict[str, Any], task_count: int) -> int:
+    if task_count < 1:
+        raise PipelineError("Parallel model scheduling requires at least one task")
+    raw = os.environ.get("SEPSIS_PARALLEL_WORKERS", "1")
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise PipelineError("SEPSIS_PARALLEL_WORKERS must be an integer") from exc
+    maximum = min(
+        int(MODEL_POLICY["maximum_parallel_workers"]),
+        task_count,
+        allocated_total_cpu_count()
+        // (allocated_cpu_count() * parallel_candidate_workers(gpu, len(MODEL_CANDIDATES))),
+    )
+    if gpu.get("available"):
+        maximum = min(maximum, 1)
+    if requested < 1 or requested > maximum:
+        raise PipelineError(
+            f"Parallel model workers must be between 1 and {maximum}; got {requested}"
+        )
+    return requested
+
+
+def parallel_candidate_workers(gpu: dict[str, Any], task_count: int) -> int:
+    if task_count < 1:
+        raise PipelineError("Parallel candidate scheduling requires at least one task")
+    raw = os.environ.get("SEPSIS_PARALLEL_CANDIDATES", "1")
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise PipelineError("SEPSIS_PARALLEL_CANDIDATES must be an integer") from exc
+    maximum = min(
+        int(MODEL_POLICY["maximum_parallel_candidates"]),
+        task_count,
+        allocated_total_cpu_count() // allocated_cpu_count(),
+    )
+    if gpu.get("available"):
+        maximum = min(maximum, 1)
+    if requested < 1 or requested > maximum:
+        raise PipelineError(
+            f"Parallel candidate workers must be between 1 and {maximum}; got {requested}"
+        )
+    return requested
+
+
+def ordered_parallel_map(function: Any, items: Iterable[Any], workers: int) -> list[Any]:
+    values = list(items)
+    if workers == 1:
+        return [function(value) for value in values]
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(function, values))
 
 
 def xgb_model(params: dict[str, Any], seed: int, gpu: dict[str, Any], n_estimators: int, early_stopping: bool = False):
@@ -687,19 +761,29 @@ def fit_xgb(
     validation: pd.DataFrame | None = None,
     target_column: str = "SepsisLabel",
     weight_policy: str = "equal_patient",
+    train_matrix: np.ndarray | None = None,
+    validation_matrix: np.ndarray | None = None,
 ) -> Any:
+    train_matrix = matrix(train, columns) if train_matrix is None else train_matrix
     kwargs: dict[str, Any] = {
         "sample_weight": model_training_weights(train, target_column, weight_policy),
         "verbose": False,
     }
     if validation is not None:
+        validation_matrix = (
+            matrix(validation, columns)
+            if validation_matrix is None
+            else validation_matrix
+        )
         kwargs.update({
-            "eval_set": [(matrix(validation, columns), validation[target_column])],
+            "eval_set": [(validation_matrix, validation[target_column])],
             "sample_weight_eval_set": [
                 model_training_weights(validation, target_column, weight_policy)
             ],
         })
-    return model.fit(matrix(train, columns), train[target_column], **kwargs)
+    elif validation_matrix is not None:
+        raise PipelineError("A validation matrix requires validation rows")
+    return model.fit(train_matrix, train[target_column], **kwargs)
 
 
 def model_training_weights(
@@ -858,11 +942,14 @@ def select_inner_primary_model(
                 onset.TARGET_COLUMN, onset.ELIGIBLE_COLUMN,
             ]].copy()
             columns = primary_model_features(fit_transformed, representation)
+            fit_matrix = matrix(fit, columns)
+            valid_matrix = matrix(valid, columns)
             koopman_fit = representation_fit["koopman"]
             transition_counts = (
                 koopman_fit.training_transition_counts if koopman_fit is not None else {}
             )
-            for candidate_index, candidate in enumerate(MODEL_CANDIDATES):
+            def fit_candidate(item: tuple[int, dict[str, Any]]):
+                candidate_index, candidate = item
                 model = xgb_model(
                     candidate,
                     split_seed + outer_fold * 1000 + lift_index * 100 + candidate_index * 10 + inner_fold,
@@ -870,12 +957,28 @@ def select_inner_primary_model(
                     MODEL_POLICY["early_stopping_max_estimators"],
                     early_stopping=True,
                 )
-                fit_xgb(model, fit, columns, valid, target_column=onset.TARGET_COLUMN)
+                fit_xgb(
+                    model,
+                    fit,
+                    columns,
+                    valid,
+                    target_column=onset.TARGET_COLUMN,
+                    train_matrix=fit_matrix,
+                    validation_matrix=valid_matrix,
+                )
                 valid_scored = valid.copy()
-                probability = model.predict_proba(matrix(valid, columns))[:, 1]
+                probability = model.predict_proba(valid_matrix)[:, 1]
                 valid_scored["probability"] = probability
                 score = onset.patient_balanced_average_precision(valid_scored, "probability")
                 best_round = int(getattr(model, "best_iteration", model.n_estimators - 1)) + 1
+                return candidate, probability, score, best_round
+
+            candidate_tasks = list(enumerate(MODEL_CANDIDATES))
+            for candidate, probability, score, best_round in ordered_parallel_map(
+                fit_candidate,
+                candidate_tasks,
+                parallel_candidate_workers(gpu, len(candidate_tasks)),
+            ):
                 scores[(lift, candidate["id"])].append(score)
                 rounds[(lift, candidate["id"])].append(best_round)
                 candidate_probabilities[(lift, candidate["id"])].append(probability)
@@ -1116,7 +1219,10 @@ def primary_outer_oof(
     robustness_records: list[pd.DataFrame] = []
     selection_rows: list[dict[str, Any]] = []
     inner_detail_rows: list[dict[str, Any]] = []
-    for outer_fold in sorted(merged["Fold"].unique()):
+
+    def fit_outer_fold(outer_fold: int) -> tuple[
+        pd.DataFrame, pd.DataFrame | None, dict[str, Any], list[dict[str, Any]]
+    ]:
         outer_train = merged.loc[merged["Fold"] != outer_fold].copy()
         outer_test = merged.loc[merged["Fold"] == outer_fold].copy()
         if set(outer_train["Patient_ID"]) & set(outer_test["Patient_ID"]):
@@ -1133,9 +1239,17 @@ def primary_outer_oof(
         transformed_test = transform_primary_representation(outer_test, representation_fit)
         train_decisions = onset.primary_decisions(transformed_train)
         columns = primary_model_features(transformed_train, representation)
+        train_matrix = matrix(train_decisions, columns)
+        test_matrix = matrix(transformed_test, columns)
         model = xgb_model(candidate, split_seed + int(outer_fold), gpu, rounds)
-        fit_xgb(model, train_decisions, columns, target_column=onset.TARGET_COLUMN)
-        raw_probability = model.predict_proba(matrix(transformed_test, columns))[:, 1]
+        fit_xgb(
+            model,
+            train_decisions,
+            columns,
+            target_column=onset.TARGET_COLUMN,
+            train_matrix=train_matrix,
+        )
+        raw_probability = model.predict_proba(test_matrix)[:, 1]
         calibrated_probability = onset.apply_calibration(calibration, raw_probability)
         transformed_test = attach_prediction_columns(
             transformed_test,
@@ -1143,14 +1257,18 @@ def primary_outer_oof(
             "nested_alarm_threshold",
             threshold,
         )
-        records.append(transformed_test[PRIMARY_OOF_COLUMNS])
+        robustness = None
         if representation in ROBUSTNESS_POLICY["representations"]:
             test_decisions = onset.primary_decisions(transformed_test).sort_values(
                 ["Patient_ID", "ICULOS"], kind="mergesort"
             ).reset_index(drop=True)
+            robustness_matrix = matrix(test_decisions, columns)
             robustness = test_decisions[ROBUSTNESS_IDENTITY_COLUMNS].copy()
             primary_seed = ROBUSTNESS_POLICY["training_seed_bases"][0]
-            for seed_base, balance_policy, _ in robustness_configurations():
+            configurations = robustness_configurations()
+
+            def fit_robustness(configuration: tuple[int, str, str]):
+                seed_base, balance_policy, _ = configuration
                 if seed_base == primary_seed and balance_policy == "equal_patient":
                     probability = probability_array(
                         test_decisions["prob_raw"], "Primary robustness OOF"
@@ -1165,18 +1283,22 @@ def primary_outer_oof(
                         columns,
                         target_column=onset.TARGET_COLUMN,
                         weight_policy=balance_policy,
+                        train_matrix=train_matrix,
                     )
-                    probability = sensitivity_model.predict_proba(
-                        matrix(test_decisions, columns)
-                    )[:, 1]
+                    probability = sensitivity_model.predict_proba(robustness_matrix)[:, 1]
+                return seed_base, balance_policy, probability
+
+            for seed_base, balance_policy, probability in ordered_parallel_map(
+                fit_robustness,
+                configurations,
+                parallel_candidate_workers(gpu, len(configurations)),
+            ):
                 robustness[robustness_probability_column(
                     representation, seed_base, balance_policy
                 )] = probability_array(
                     probability, "Robustness raw probability"
                 ).astype(np.float32)
-            robustness_records.append(robustness)
-        inner_detail_rows.extend({"representation": representation, "outer_fold": int(outer_fold), **row} for row in detail)
-        selection_rows.append({
+        selection = {
             "representation": representation,
             "outer_fold": int(outer_fold),
             "selected_candidate": candidate["id"],
@@ -1201,7 +1323,23 @@ def primary_outer_oof(
             "outer_test_patient_hash": stable_hash(sorted(outer_test["Patient_ID"].unique())),
             "outer_train_patient_count": int(outer_train["Patient_ID"].nunique()),
             "outer_test_patient_count": int(outer_test["Patient_ID"].nunique()),
-        })
+        }
+        inner_detail = [
+            {"representation": representation, "outer_fold": int(outer_fold), **row}
+            for row in detail
+        ]
+        return transformed_test[PRIMARY_OOF_COLUMNS], robustness, selection, inner_detail
+
+    outer_folds = [int(value) for value in sorted(merged["Fold"].unique())]
+    workers = parallel_model_workers(gpu, len(outer_folds))
+    for record, robustness, selection, inner_detail in ordered_parallel_map(
+        fit_outer_fold, outer_folds, workers
+    ):
+        records.append(record)
+        if robustness is not None:
+            robustness_records.append(robustness)
+        selection_rows.append(selection)
+        inner_detail_rows.extend(inner_detail)
     oof = pd.concat(records, ignore_index=True).sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
     if len(oof) != len(merged) or oof.duplicated(["Patient_ID", "ICULOS"]).any():
         raise PipelineError("Direct-onset outer OOF does not contain every source row exactly once")
@@ -2163,6 +2301,9 @@ def model_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str
         "xgboost_backend": xgb_backend(gpu),
         "slurm_cpus_per_task": os.environ.get("SLURM_CPUS_PER_TASK", "unset"),
         "slurm_mem_per_node": os.environ.get("SLURM_MEM_PER_NODE", "unset"),
+        "fit_threads": allocated_cpu_count(),
+        "parallel_workers": parallel_model_workers(gpu, MODEL_POLICY["outer_folds"]),
+        "parallel_candidates": parallel_candidate_workers(gpu, len(MODEL_CANDIDATES)),
     }
     atomic_json(run_dir / "model_runtime_manifest.json", model_runtime)
     features = pd.read_csv(run_dir / "features.csv").sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
@@ -2179,11 +2320,23 @@ def model_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[str
     robustness = combine_robustness_oof(robustness_frames)
     atomic_csv(robustness, run_dir / "robustness_oof.csv")
     artifacts.append("robustness_oof.csv")
-    transport_runs = [
-        fit_primary_source_transport(features, representation, train_source, test_source, gpu)
+    transport_tasks = [
+        (representation, train_source, test_source)
         for representation in onset.REPRESENTATIONS
         for train_source, test_source in (("A", "B"), ("B", "A"))
     ]
+
+    def fit_transport(task: tuple[str, str, str]):
+        representation, train_source, test_source = task
+        return fit_primary_source_transport(
+            features, representation, train_source, test_source, gpu
+        )
+
+    transport_runs = ordered_parallel_map(
+        fit_transport,
+        transport_tasks,
+        parallel_model_workers(gpu, len(transport_tasks)),
+    )
     atomic_csv(pd.DataFrame([summary for summary, _ in transport_runs]), run_dir / "transport.csv")
     atomic_csv(
         pd.DataFrame([row for _, evidence in transport_runs for row in evidence]),
@@ -2908,6 +3061,10 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         stages = resource_manifest.get("stages", {})
         profile_selection = resource_manifest.get("profile_selection", {})
         selected = profile_selection.get("selected", {})
+        fit_profile = profile_selection.get("fit_profile", {})
+        parallel_workers = profile_selection.get("parallel_workers", 0)
+        parallel_candidates = profile_selection.get("parallel_candidates", 0)
+        selected_validation = resource_manifest.get("selected_model_validation", {})
         model_runtime = json.loads((run_dir / "model_runtime_manifest.json").read_text(encoding="utf-8"))
         resource_files = {
             stage: json.loads(
@@ -2918,10 +3075,18 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         profile_file = json.loads(
             (run_dir / "resource_profile_selection.json").read_text(encoding="utf-8")
         )
+        selected_validation_file = json.loads(
+            (run_dir / "profiles" / "selected-model.json").read_text(encoding="utf-8")
+        )
+        selected_benchmark = json.loads(
+            (run_dir / "profiles" / "selected-model-benchmark.json").read_text(
+                encoding="utf-8"
+            )
+        )
         try:
             runtime_cpus = int(model_runtime.get("slurm_cpus_per_task", 0))
             runtime_gpus = int(model_runtime.get("gpu", {}).get("n_gpus_used", 0))
-            expected_memory = max(
+            expected_fit_memory = max(
                 2,
                 int(math.ceil((profile_selection.get("memory_basis_peak_gb", 0) * 1.20) / 2) * 2),
             )
@@ -2932,20 +3097,41 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or set(stages) != {"prepare", "model", "finalize"}
             or any(stable_hash(stages[name]) != stable_hash(resource_files[name]) for name in stages)
             or stable_hash(profile_selection) != stable_hash(profile_file)
+            or stable_hash(selected_validation) != stable_hash(selected_validation_file)
+            or selected_validation.get("benchmark") != selected_benchmark
+            or selected_validation.get("requested") != selected
+            or selected_benchmark.get("fit_threads") != fit_profile.get("cpus")
+            or selected_benchmark.get("parallel_workers") != parallel_workers
+            or selected_benchmark.get("parallel_candidates") != parallel_candidates
+            or selected_benchmark.get("concurrent_xgboost_fits")
+            != parallel_workers * parallel_candidates
             or resource_manifest.get("caps") != {
-                "maximum_cpus": 32, "maximum_memory_gb": 64, "maximum_gpus": 1,
+                "maximum_cpus": 64, "maximum_memory_gb": 64, "maximum_gpus": 1,
             }
             or resource_manifest.get("no_artificial_memory_fill") is not True
-            or not 1 <= selected.get("cpus", 0) <= 32
+            or not 1 <= selected.get("cpus", 0) <= 64
             or not 2 <= selected.get("memory_gb", 0) <= 64
             or selected.get("gpus") not in (0, 1)
-            or selected.get("memory_gb") != expected_memory
+            or fit_profile.get("memory_gb") != expected_fit_memory
+            or fit_profile.get("gpus") != selected.get("gpus")
+            or not 1 <= fit_profile.get("cpus", 0) <= 32
+            or not 1 <= parallel_workers <= MODEL_POLICY["maximum_parallel_workers"]
+            or not 1 <= parallel_candidates <= MODEL_POLICY["maximum_parallel_candidates"]
+            or selected.get("cpus")
+            != fit_profile.get("cpus") * parallel_workers * parallel_candidates
+            or selected.get("memory_gb") != fit_profile.get("memory_gb") * parallel_workers
+            or profile_selection.get("finalize_memory_gb") != expected_fit_memory
             or len(profile_selection.get("profiles", [])) != 6
             or (
                 selected.get("gpus") == 0
-                and profile_selection.get(
-                    "selected_profile_active_cpu_efficiency", 0
-                ) <= 0.50
+                and (
+                    profile_selection.get(
+                        "selected_profile_active_cpu_efficiency", 0
+                    ) <= 0.50
+                    or selected_benchmark.get(
+                        "xgboost_active_cpu_efficiency", 0
+                    ) <= 0.50
+                )
             )
             or (
                 selected.get("gpus") == 1
@@ -2970,7 +3156,9 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or stages["model"].get("requested") != selected
             or stages["prepare"].get("requested") != {"cpus": 1, "memory_gb": 10, "gpus": 0}
             or stages["finalize"].get("requested") != {
-                "cpus": 1, "memory_gb": selected.get("memory_gb"), "gpus": 0,
+                "cpus": 1,
+                "memory_gb": profile_selection.get("finalize_memory_gb"),
+                "gpus": 0,
             }
             or any(stage.get("run_id") != runtime.get("run_id") for stage in stages.values())
             or any(stage.get("source_git_commit") != runtime.get("git_commit") for stage in stages.values())
@@ -2979,6 +3167,11 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
                 for stage in stages.values()
             )
             or runtime_cpus != selected.get("cpus")
+            or selected_validation.get("measured", {}).get("max_rss_gb", math.inf)
+            > selected.get("memory_gb", 0)
+            or model_runtime.get("fit_threads") != fit_profile.get("cpus")
+            or model_runtime.get("parallel_workers") != parallel_workers
+            or model_runtime.get("parallel_candidates") != parallel_candidates
             or bool(model_runtime.get("gpu", {}).get("available")) != bool(selected.get("gpus"))
             or runtime_gpus != selected.get("gpus")
             or any(

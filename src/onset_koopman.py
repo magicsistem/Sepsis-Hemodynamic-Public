@@ -10,6 +10,7 @@ import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Iterable
 
 import numpy as np
@@ -55,6 +56,7 @@ ALARM_POLICY = {
     "threshold_grid": tuple(np.round(np.arange(0.01, 1.01, 0.01), 2)),
 }
 REPRESENTATIONS = ("C0", "C1", "C2", "C3")
+_THREADPOOL_LIMIT_LOCK = Lock()
 
 
 class OnsetKoopmanError(RuntimeError):
@@ -191,16 +193,25 @@ def _previous_state(frame: pd.DataFrame, signals: tuple[str, ...]) -> tuple[np.n
     if times.isna().any():
         raise OnsetKoopmanError("Representation ICULOS must be numeric")
     previous_exists = patients.eq(patients.shift())
-    state_parts: list[np.ndarray] = []
-    for signal in signals:
-        raw = pd.to_numeric(frame[raw_column(signal)], errors="coerce")
-        last = raw.groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
-        observed_at = times.where(raw.notna()).groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
-        age = times - observed_at
-        last = last.where(age <= KOOPMAN_POLICY["maximum_observation_age_hours"])
-        age = age.clip(lower=0, upper=KOOPMAN_POLICY["maximum_observation_age_hours"])
-        state_parts.extend([last.to_numpy(dtype=float), age.to_numpy(dtype=float)])
-    state = np.column_stack(state_parts) if state_parts else np.empty((len(frame), 0), dtype=float)
+    if not signals:
+        return np.empty((len(frame), 0), dtype=float), previous_exists.to_numpy(dtype=bool)
+    raw = frame[[raw_column(signal) for signal in signals]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    raw.columns = list(signals)
+    last = raw.groupby(patients, sort=False).ffill().groupby(
+        patients, sort=False
+    ).shift()
+    observed_at = raw.notna().mul(times, axis=0).where(raw.notna())
+    observed_at = observed_at.groupby(patients, sort=False).ffill().groupby(
+        patients, sort=False
+    ).shift()
+    age = observed_at.rsub(times, axis=0)
+    last = last.where(age <= KOOPMAN_POLICY["maximum_observation_age_hours"])
+    age = age.clip(lower=0, upper=KOOPMAN_POLICY["maximum_observation_age_hours"])
+    state = np.empty((len(frame), 2 * len(signals)), dtype=float)
+    state[:, 0::2] = last.to_numpy(dtype=float)
+    state[:, 1::2] = age.to_numpy(dtype=float)
     return state, previous_exists.to_numpy(dtype=bool)
 
 
@@ -294,9 +305,13 @@ def fit_koopman(
     normal = normal.to_numpy(dtype=bool) & previous_exists
     patient_hash = _training_patient_hash(train)
     try:
-        allocated_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", "1"))
+        allocated_threads = int(
+            os.environ.get(
+                "SEPSIS_FIT_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "1")
+            )
+        )
     except ValueError as exc:
-        raise OnsetKoopmanError("SLURM_CPUS_PER_TASK must be an integer") from exc
+        raise OnsetKoopmanError("Koopman fit thread count must be an integer") from exc
     if not 1 <= allocated_threads <= KOOPMAN_POLICY["maximum_operator_threads"]:
         raise OnsetKoopmanError("Koopman operator threads exceed the approved CPU bounds")
 
@@ -329,10 +344,13 @@ def fit_koopman(
     workers = min(allocated_threads, len(selected))
     from threadpoolctl import threadpool_limits
 
-    with threadpool_limits(limits=1), ThreadPoolExecutor(max_workers=workers) as executor:
-        fitted_signals = list(
-            executor.map(lambda item: fit_signal(*item), enumerate(selected))
-        )
+    # threadpoolctl changes process-global native-library limits. Outer folds may
+    # run concurrently, so serialize only this short limit-changing section.
+    with _THREADPOOL_LIMIT_LOCK:
+        with threadpool_limits(limits=1), ThreadPoolExecutor(max_workers=workers) as executor:
+            fitted_signals = list(
+                executor.map(lambda item: fit_signal(*item), enumerate(selected))
+            )
     models = {signal: model for signal, model, _, _, _ in fitted_signals if model is not None}
     residual_locations = {
         signal: center for signal, model, center, _, _ in fitted_signals if model is not None
@@ -363,13 +381,10 @@ def _rolling_energy(frame: pd.DataFrame, energy: np.ndarray, hours: int) -> tupl
         position = np.asarray(positions, dtype=int)
         time = pd.to_numeric(frame.iloc[position]["ICULOS"], errors="raise").to_numpy(dtype=float)
         values = energy[position]
-        for local_end, absolute_end in enumerate(position):
-            start = np.searchsorted(time, time[local_end] - hours, side="right")
-            window = values[start : local_end + 1]
-            finite = window[np.isfinite(window)]
-            if len(finite):
-                means[absolute_end] = float(finite.mean())
-                maxima[absolute_end] = float(finite.max())
+        indexed = pd.Series(values, index=pd.to_timedelta(time, unit="h"))
+        rolling = indexed.rolling(f"{hours}h", min_periods=1, closed="right")
+        means[position] = rolling.mean().to_numpy(dtype=float)
+        maxima[position] = rolling.max().to_numpy(dtype=float)
     return means, maxima
 
 
@@ -432,26 +447,37 @@ def transform_deltas(
     """Emit fixed-schema observed deltas/slopes without treating LOCF as measurement."""
     all_dynamic = tuple(all_dynamic_columns)
     selected = set(selected_signals)
-    output = pd.DataFrame(index=frame.index)
+    selected_ordered = [signal for signal in all_dynamic if signal in selected]
+    values = {
+        name: np.full(len(frame), np.nan, dtype=np.float32)
+        for signal in all_dynamic
+        for name in (delta_column(signal), slope_column(signal))
+    }
+    if not selected_ordered:
+        return pd.DataFrame(values, index=frame.index)
     patients = frame["Patient_ID"]
     times = pd.to_numeric(frame["ICULOS"], errors="raise")
-    for signal in all_dynamic:
-        delta = np.full(len(frame), np.nan, dtype=np.float32)
-        slope = np.full(len(frame), np.nan, dtype=np.float32)
-        if signal in selected:
-            raw = pd.to_numeric(frame[raw_column(signal)], errors="coerce")
-            previous_value = raw.groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
-            previous_time = times.where(raw.notna()).groupby(patients, sort=False).ffill().groupby(patients, sort=False).shift()
-            observed = raw.notna() & previous_value.notna() & previous_time.notna()
-            difference = raw[observed] - previous_value[observed]
-            elapsed = times[observed] - previous_time[observed]
-            if (elapsed <= 0).any():
-                raise OnsetKoopmanError("Delta transform requires strictly increasing observation times")
-            delta[observed.to_numpy()] = difference.to_numpy(dtype=np.float32)
-            slope[observed.to_numpy()] = (difference / elapsed).to_numpy(dtype=np.float32)
-        output[delta_column(signal)] = delta
-        output[slope_column(signal)] = slope
-    return output
+    raw = frame[[raw_column(signal) for signal in selected_ordered]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    raw.columns = selected_ordered
+    previous_value = raw.groupby(patients, sort=False).ffill().groupby(
+        patients, sort=False
+    ).shift()
+    previous_time = raw.notna().mul(times, axis=0).where(raw.notna())
+    previous_time = previous_time.groupby(patients, sort=False).ffill().groupby(
+        patients, sort=False
+    ).shift()
+    elapsed = previous_time.rsub(times, axis=0)
+    observed = raw.notna() & previous_value.notna() & previous_time.notna()
+    if ((elapsed <= 0) & observed).any().any():
+        raise OnsetKoopmanError("Delta transform requires strictly increasing observation times")
+    delta = (raw - previous_value).where(observed).astype(np.float32)
+    slope = delta.div(elapsed).where(observed).astype(np.float32)
+    for signal in selected_ordered:
+        values[delta_column(signal)] = delta[signal].to_numpy(dtype=np.float32)
+        values[slope_column(signal)] = slope[signal].to_numpy(dtype=np.float32)
+    return pd.DataFrame(values, index=frame.index)
 
 
 def equal_patient_weights(frame: pd.DataFrame) -> np.ndarray:
