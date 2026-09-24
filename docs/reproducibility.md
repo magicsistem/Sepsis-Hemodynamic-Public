@@ -79,6 +79,12 @@ Before the full model stage, the selected concurrent layout is benchmarked
 again with its exact fit/fold/candidate concurrency. The run aborts unless the
 active XGBoost phase exceeds 50% of the CPU allocation and remains within the
 selected memory request.
+Preparation is separately bounded to 16 CPU/32 GB: archive members and
+patient-complete feature batches are processed concurrently, then restored to
+stable source/patient/time order. Final reporting and its independent C0--C3
+revalidation use 4 CPU/32 GB. Both pools set native BLAS/OpenMP threads to one,
+so their worker count is the total CPU bound rather than a multiplier. These
+non-model stages never request the 64 CPU model ceiling.
 It links model/finalize jobs with `afterok`. CPU eligibility requires
 more than 50% active compute efficiency. GPU eligibility requires more than
 50% mean utilization across at least three active one-second samples and more

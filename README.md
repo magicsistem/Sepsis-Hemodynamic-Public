@@ -55,6 +55,10 @@ hash- and source-bound stage checkpoints and refuses incompatible partials.
   active compute efficiency; a GPU profile must exceed 50% mean utilization
   over at least three active one-second samples and improve total time by more
   than 5%. RAM is measured/estimated peak plus 20%, never artificial fill.
+- `prepare` uses 16 CPU/32 GB for deterministic file and patient batches;
+  `finalize` plus independent artifact validation use 4 CPU/32 GB across C0--C3.
+  Native math is one-threaded in those worker pools, so neither stage reserves
+  the 64 CPU intended only for measured concurrent XGBoost work.
 
 Historical files under `results/` and `external_artifacts/` are retained as
 evidence only. The corrected pipeline never reads them.

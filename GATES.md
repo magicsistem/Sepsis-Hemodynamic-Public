@@ -92,4 +92,9 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
 - [ ] G22: independent outer folds, model candidates, and transports execute concurrently without oversubscription, nondeterministic ordering, source leakage, or exceeding 64 CPU/64 GB
   CHECK: python -m unittest tests.test_onset_koopman.NestedPolicyTests tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G22_BOUNDED_PARALLELISM_PASS\n'
   EXPECT: G22_BOUNDED_PARALLELISM_PASS
-  EVIDENCE: ordered stdlib thread pools, one cached float32 matrix per split, explicit threads*folds*candidates CPU arithmetic, process-global BLAS-limit locking, and a selected-layout CEDIA benchmark gate are implemented; exact-container verification remains pending before replacing the active sequential run.
+  EVIDENCE: commit c34b170 passed the exact 59-test container suite in job 27293. The later prepare/finalize acceleration changes source identity, so a fresh exact-container suite is required before the full run.
+
+- [ ] G23: prepare and finalize/independent validation use deterministic bounded concurrency, match the serial scientific outputs, fail closed, and do not reserve the 64-CPU model ceiling
+  CHECK: python -m unittest tests.test_scientific_pipeline.ScientificPipelineTests.test_parallel_prepare_matches_serial_order_and_features tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G23_BOUNDED_STAGE_PARALLELISM_PASS\n'
+  EXPECT: G23_BOUNDED_STAGE_PARALLELISM_PASS
+  EVIDENCE: 16-worker prepare and four-worker C0--C3 finalize/validation are implemented with native threads fixed at one; serial/parallel parity and exact resource-contract oracles are added. Exact-container verification and final stage resource evidence remain pending.

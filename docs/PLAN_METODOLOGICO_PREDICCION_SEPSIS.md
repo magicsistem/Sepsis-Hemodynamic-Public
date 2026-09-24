@@ -269,13 +269,16 @@ completa de features: siete fijados por el límite empírico de la ruta nested C
 y uno para overhead transitorio de matrices/runtime, más
 las dos mayores matrices cuadráticas outer, OOF primario y OOF de robustness;
 el margen de 20 % se aplica después de sumar esos componentes.
-`prepare` usa un CPU y 10 GB, derivados del último pico exitoso de 8.02 GB más
-20 %, porque más threads no aceleraron esa ruta serial. Un intento exacto agotó
-ese límite al volver a cargar innecesariamente la matriz ancha después de
-exportarla; la frontera corregida carga sólo las cinco columnas necesarias para
-folds y flujo de cohorte. El nuevo perfil debe confirmar el margen antes del run
-completo. El muestreo GPU se hace cada segundo para no perder fits cortos. No se
-llena memoria artificialmente.
+`prepare` usa 16 CPU y 32 GB. La lectura de los 40,336 PSV se divide en 16 lotes
+con un `ZipFile` independiente por worker, y la construcción de features se
+divide en 16 intervalos contiguos que nunca separan filas de un paciente. El
+orden final se reconstruye de forma estable y un fallo en cualquier worker
+aborta la etapa. Después de exportar la matriz ancha sólo se cargan las cinco
+columnas necesarias para folds y flujo de cohorte. `finalize` y su validación
+independiente usan cuatro workers/CPU y 32 GB para las cuatro representaciones;
+no reservan 64 CPU. BLAS se limita a un thread en ambas etapas para impedir
+oversubscription. El muestreo GPU se hace cada segundo para no perder fits
+cortos. No se llena memoria artificialmente.
 
 Dentro de cada fold, los dos candidatos XGBoost independientes también pueden
 ejecutarse concurrentemente con la misma restricción total. Con el perfil CPU16
