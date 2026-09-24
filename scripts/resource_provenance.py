@@ -117,6 +117,7 @@ def verify_selected_profile(args):
         or payload.get("stage") != "selected-model"
         or payload.get("status") != "PASS"
         or payload.get("hostname") != "compute-0-2"
+        or payload.get("partition") != ("gpu" if selected.get("gpus") else "cpu")
         or payload.get("requested") != selected
         or payload.get("run_id") != selection.get("run_id")
         or payload.get("source_git_commit") != selection.get("source_git_commit")
@@ -406,6 +407,10 @@ def aggregate(args):
     profile = json.loads(args.profile_selection.read_text(encoding="utf-8"))
     if profile.get("status") != "PASS":
         raise ResourceError("Resource profile selection did not pass")
+    verify_selected_profile(argparse.Namespace(
+        profile_dir=args.profile_selection.parent / "profiles",
+        selection=args.profile_selection,
+    ))
     selected = profile.get("selected", {})
     selected_profile_path = args.profile_selection.parent / "profiles" / "selected-model.json"
     selected_benchmark_path = (

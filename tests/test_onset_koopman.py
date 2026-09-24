@@ -848,12 +848,18 @@ class ResourceOrchestrationTests(unittest.TestCase):
             selection.write_text(json.dumps({
                 "status": "PASS", "selected": selected, "run_id": "run",
                 "finalize_memory_gb": 12,
+                "fit_profile": {"cpus": 8, "memory_gb": 12, "gpus": 1},
+                "parallel_workers": 1, "parallel_candidates": 1,
                 "source_git_commit": "a" * 40,
                 "source_inventory_sha256": "b" * 64,
             }), encoding="utf-8")
             profiles = root / "profiles"
             profiles.mkdir()
-            benchmark = {"status": "PASS"}
+            benchmark = {
+                "status": "PASS", "fit_threads": 8,
+                "parallel_workers": 1, "parallel_candidates": 1,
+                "concurrent_xgboost_fits": 1,
+            }
             (profiles / "selected-model-benchmark.json").write_text(
                 json.dumps(benchmark), encoding="utf-8"
             )
@@ -863,6 +869,13 @@ class ResourceOrchestrationTests(unittest.TestCase):
                 "requested": selected, "run_id": "run",
                 "source_git_commit": "a" * 40,
                 "source_inventory_sha256": "b" * 64,
+                "measured": {
+                    "max_rss_gb": 8.0,
+                    "gpu": {
+                        "active_samples": 4,
+                        "mean_active_utilization_percent": 75.0,
+                    },
+                },
                 "benchmark": benchmark,
             }), encoding="utf-8")
             args = Namespace(
