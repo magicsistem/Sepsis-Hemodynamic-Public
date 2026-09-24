@@ -15,6 +15,8 @@ GPU_CAP = 1
 MIN_ACTIVE_CPU_EFFICIENCY = 0.50
 MIN_ACTIVE_GPU_UTILIZATION_PERCENT = 50.0
 MIN_ACTIVE_GPU_SAMPLES = 3
+PREPARE_REQUEST = {"cpus": 16, "memory_gb": 32, "gpus": 0}
+FINALIZE_REQUEST = {"cpus": 4, "memory_gb": 32, "gpus": 0}
 
 
 class ResourceError(RuntimeError):
@@ -360,7 +362,6 @@ def select_profile(args):
         "fit_profile": fit_profile,
         "parallel_workers": parallel_workers,
         "parallel_candidates": parallel_candidates,
-        "finalize_memory_gb": requested_memory,
         "selected_profile_job_id": selected["slurm_job_id"],
         "selected_profile_elapsed_seconds": selected["measured"]["elapsed_seconds"],
         "selected_profile_cpu_efficiency": selected["measured"]["cpu_efficiency"],
@@ -422,13 +423,9 @@ def aggregate(args):
     selected_benchmark = json.loads(selected_benchmark_path.read_text(encoding="utf-8"))
     stage_context = next(iter(stages.values()))
     if (
-        stages["prepare"]["requested"] != {"cpus": 1, "memory_gb": 10, "gpus": 0}
+        stages["prepare"]["requested"] != PREPARE_REQUEST
         or stages["model"]["requested"] != selected
-        or stages["finalize"]["requested"] != {
-            "cpus": 1,
-            "memory_gb": profile.get("finalize_memory_gb"),
-            "gpus": 0,
-        }
+        or stages["finalize"]["requested"] != FINALIZE_REQUEST
         or len({stage["run_id"] for stage in stages.values()}) != 1
         or len({stage["source_git_commit"] for stage in stages.values()}) != 1
         or len({stage["source_inventory_sha256"] for stage in stages.values()}) != 1

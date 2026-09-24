@@ -76,6 +76,64 @@ class ScientificPipelineTests(unittest.TestCase):
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.archive_inventory(archive)
 
+    def test_parallel_prepare_matches_serial_order_and_features(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "input.zip"
+            first = patient_frame()
+            second = patient_frame()
+            second["Patient_ID"] = "B:p000002"
+            second["SourceSet"] = "B"
+
+            def psv(frame):
+                return frame.loc[:, list(pipeline.CHALLENGE_COLUMNS)].to_csv(
+                    sep="|", index=False
+                )
+
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("training_setB/training_setB/p000002.psv", psv(second))
+                handle.writestr("training_setA/training/p000001.psv", psv(first))
+            serial_harmonized = root / "serial_harmonized.csv"
+            parallel_harmonized = root / "parallel_harmonized.csv"
+            with mock.patch.object(
+                pipeline, "validate_cohort_identity", return_value={"A": 1, "B": 1}
+            ), mock.patch.dict(
+                os.environ,
+                {"SLURM_CPUS_PER_TASK": "2", "SEPSIS_STAGE_WORKERS": "1"},
+            ):
+                pipeline.harmonize_archive(archive, serial_harmonized)
+            with mock.patch.object(
+                pipeline, "validate_cohort_identity", return_value={"A": 1, "B": 1}
+            ), mock.patch.dict(
+                os.environ,
+                {"SLURM_CPUS_PER_TASK": "2", "SEPSIS_STAGE_WORKERS": "2"},
+            ):
+                pipeline.harmonize_archive(archive, parallel_harmonized)
+            pd.testing.assert_frame_equal(
+                pd.read_csv(serial_harmonized), pd.read_csv(parallel_harmonized)
+            )
+
+            serial_features = root / "serial_features.csv"
+            parallel_features = root / "parallel_features.csv"
+            with mock.patch.dict(
+                os.environ,
+                {"SLURM_CPUS_PER_TASK": "2", "SEPSIS_STAGE_WORKERS": "1"},
+            ):
+                pipeline.build_features(serial_harmonized, serial_features)
+            with mock.patch.dict(
+                os.environ,
+                {"SLURM_CPUS_PER_TASK": "2", "SEPSIS_STAGE_WORKERS": "2"},
+            ):
+                pipeline.build_features(serial_harmonized, parallel_features)
+            pd.testing.assert_frame_equal(
+                pd.read_csv(serial_features), pd.read_csv(parallel_features)
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"SLURM_CPUS_PER_TASK": "2", "SEPSIS_STAGE_WORKERS": "3"},
+            ), self.assertRaises(pipeline.PipelineError):
+                pipeline.stage_worker_count("prepare", 2)
+
     def test_chronology_and_persistent_shifted_labels_are_fail_closed(self):
         valid = patient_frame(hours=(1, 2, 3, 4), labels=(0, 1, 1, 1))
         pipeline.validate_patient_frame(valid, "p000001.psv")

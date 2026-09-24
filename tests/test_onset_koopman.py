@@ -777,7 +777,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
             self.assertEqual(selected["parallel_workers"], 2)
             self.assertEqual(selected["parallel_candidates"], 2)
             self.assertEqual(selected["selected"], {"cpus": 64, "memory_gb": 64, "gpus": 0})
-            self.assertEqual(selected["finalize_memory_gb"], 32)
+            self.assertNotIn("finalize_memory_gb", selected)
 
     def test_selected_parallel_profile_requires_measured_majority_cpu_use(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -833,9 +833,9 @@ class ResourceOrchestrationTests(unittest.TestCase):
             resources.mkdir()
             selected = {"cpus": 8, "memory_gb": 12, "gpus": 1}
             requests = {
-                "prepare": {"cpus": 1, "memory_gb": 10, "gpus": 0},
+                "prepare": resource_provenance.PREPARE_REQUEST,
                 "model": selected,
-                "finalize": {"cpus": 1, "memory_gb": 12, "gpus": 0},
+                "finalize": resource_provenance.FINALIZE_REQUEST,
             }
             for stage, requested in requests.items():
                 (resources / f"{stage}.json").write_text(json.dumps({
@@ -847,7 +847,6 @@ class ResourceOrchestrationTests(unittest.TestCase):
             selection = root / "selection.json"
             selection.write_text(json.dumps({
                 "status": "PASS", "selected": selected, "run_id": "run",
-                "finalize_memory_gb": 12,
                 "fit_profile": {"cpus": 8, "memory_gb": 12, "gpus": 1},
                 "parallel_workers": 1, "parallel_candidates": 1,
                 "source_git_commit": "a" * 40,
@@ -913,6 +912,11 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn('export SEPSIS_FIT_THREADS="$MODEL_FIT_THREADS"', entrypoint)
         self.assertIn('export SEPSIS_PARALLEL_WORKERS="$MODEL_WORKERS"', entrypoint)
         self.assertIn('export SEPSIS_PARALLEL_CANDIDATES="$MODEL_CANDIDATES"', entrypoint)
+        self.assertIn("PREPARE_CPUS=16", entrypoint)
+        self.assertIn("PREPARE_MEMORY_GB=32", entrypoint)
+        self.assertIn("FINALIZE_CPUS=4", entrypoint)
+        self.assertIn("FINALIZE_MEMORY_GB=32", entrypoint)
+        self.assertIn('SEPSIS_STAGE_WORKERS="$STAGE_WORKERS"', job)
         self.assertIn("verify-selected-profile", entrypoint)
         self.assertIn("selected-model", job)
         self.assertIn('FIT_THREADS * PARALLEL_WORKERS * PARALLEL_CANDIDATES <= REQUESTED_CPUS', job)
@@ -921,6 +925,14 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertEqual(resource_provenance.GPU_CAP, 1)
         self.assertEqual(resource_provenance.MIN_ACTIVE_CPU_EFFICIENCY, 0.50)
         self.assertEqual(resource_provenance.MIN_ACTIVE_GPU_UTILIZATION_PERCENT, 50.0)
+        self.assertEqual(
+            resource_provenance.PREPARE_REQUEST,
+            {"cpus": 16, "memory_gb": 32, "gpus": 0},
+        )
+        self.assertEqual(
+            resource_provenance.FINALIZE_REQUEST,
+            {"cpus": 4, "memory_gb": 32, "gpus": 0},
+        )
 
 
 class MethodologyDocumentTests(unittest.TestCase):

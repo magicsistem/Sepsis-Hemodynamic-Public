@@ -40,7 +40,7 @@ from src import onset_koopman as onset
 from vendor.physionet2019 import evaluate_sepsis_score as official_utility
 
 
-PIPELINE_VERSION = "scientific-pipeline-v7-bounded-fold-parallelism"
+PIPELINE_VERSION = "scientific-pipeline-v8-bounded-stage-parallelism"
 SEED = 20260906
 OFFICIAL_UTILITY_SHA256 = "26b8b26267ed32e8b7a7a27e45201cfc8c6640e717ba4cdc1f452b32f12b99e5"
 DATA_POLICY = {
@@ -108,6 +108,12 @@ ROBUSTNESS_POLICY = {
     ),
     "estimand": "raw-probability ranking stability; no configuration is selected",
     "evaluation_weighting": "equal total weight per patient",
+}
+STAGE_POLICY = {
+    "prepare_workers": 16,
+    "finalize_workers": 4,
+    "prepare_memory_gb": 32,
+    "finalize_memory_gb": 32,
 }
 
 
@@ -241,6 +247,8 @@ def runtime_manifest(root: Path, run_id: str, command: list[str], archive: Path)
         "model_policy_hash": stable_hash(MODEL_POLICY),
         "robustness_policy": ROBUSTNESS_POLICY,
         "robustness_policy_hash": stable_hash(ROBUSTNESS_POLICY),
+        "stage_policy": STAGE_POLICY,
+        "stage_policy_hash": stable_hash(STAGE_POLICY),
         "seed": SEED,
         "pythonhashseed": os.environ.get("PYTHONHASHSEED", "unset"),
         "dependencies": dependency_versions(),
@@ -372,25 +380,39 @@ def harmonize_archive(archive: Path, output: Path) -> dict[str, Any]:
     if not archive.is_file():
         raise PipelineError(f"Missing data archive: {archive}")
     psv_members, inventory = archive_inventory(archive)
-    frames: list[pd.DataFrame] = []
-    seen_patients: set[str] = set()
-    with zipfile.ZipFile(archive) as zf:
-        for info in psv_members:
-            source, patient = source_and_patient(info.filename)
-            if patient in seen_patients:
-                raise PipelineError(f"Duplicate source-qualified patient id: {patient}")
-            seen_patients.add(patient)
-            with zf.open(info) as handle:
-                frame = pd.read_csv(handle, sep="|", dtype=str)
-            frame.columns = canonical_headers(frame.columns, info.filename)
-            frame = frame.loc[:, list(CHALLENGE_COLUMNS)].copy()
-            frame = validate_patient_frame(frame, info.filename)
-            frame.insert(0, "Patient_ID", patient)
-            frame.insert(1, "SourceSet", source)
-            onset, onset_status = reconstruct_true_onset(frame["SepsisLabel"], frame["ICULOS"])
-            frame["TrueSepsisOnset_ICULOS"] = onset
-            frame["OnsetReconstructionStatus"] = onset_status
-            frames.append(frame)
+    identities = [source_and_patient(info.filename) for info in psv_members]
+    patients = [patient for _, patient in identities]
+    if len(patients) != len(set(patients)):
+        duplicates = sorted(patient for patient, count in Counter(patients).items() if count > 1)
+        raise PipelineError(f"Duplicate source-qualified patient id: {duplicates}")
+    workers = stage_worker_count("prepare", len(psv_members))
+    batches = [psv_members[index::workers] for index in range(workers)]
+
+    def read_batch(batch: list[zipfile.ZipInfo]) -> list[pd.DataFrame]:
+        frames = []
+        with zipfile.ZipFile(archive) as zf:
+            for info in batch:
+                source, patient = source_and_patient(info.filename)
+                with zf.open(info) as handle:
+                    frame = pd.read_csv(handle, sep="|", dtype=str)
+                frame.columns = canonical_headers(frame.columns, info.filename)
+                frame = frame.loc[:, list(CHALLENGE_COLUMNS)].copy()
+                frame = validate_patient_frame(frame, info.filename)
+                frame.insert(0, "Patient_ID", patient)
+                frame.insert(1, "SourceSet", source)
+                onset_time, onset_status = reconstruct_true_onset(
+                    frame["SepsisLabel"], frame["ICULOS"]
+                )
+                frame["TrueSepsisOnset_ICULOS"] = onset_time
+                frame["OnsetReconstructionStatus"] = onset_status
+                frames.append(frame)
+        return frames
+
+    frames = [
+        frame
+        for batch in ordered_parallel_map(read_batch, batches, workers)
+        for frame in batch
+    ]
     harmonized = pd.concat(frames, ignore_index=True).sort_values(
         ["SourceSet", "Patient_ID", "ICULOS"], kind="mergesort"
     ).reset_index(drop=True)
@@ -504,9 +526,29 @@ def build_features(harmonized: Path, output: Path) -> dict[str, Any]:
         raise PipelineError(f"Harmonized artifact is invalid; missing {missing}")
     frame[list(CHALLENGE_COLUMNS)] = numeric_columns(frame, CHALLENGE_COLUMNS, "harmonized artifact")
     frame[["TrueSepsisOnset_ICULOS"]] = numeric_columns(frame, ["TrueSepsisOnset_ICULOS"], "harmonized artifact")
+    frame = frame.sort_values(["SourceSet", "Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
+    starts = np.flatnonzero(
+        np.r_[True, frame["Patient_ID"].to_numpy()[1:] != frame["Patient_ID"].to_numpy()[:-1]]
+    )
+    workers = stage_worker_count("prepare", len(starts))
+    patient_batches = [batch for batch in np.array_split(starts, workers) if len(batch)]
+    bounds = [
+        (int(batch[0]), int(starts[np.searchsorted(starts, batch[-1]) + 1]) if batch[-1] != starts[-1] else len(frame))
+        for batch in patient_batches
+    ]
+
+    def feature_batch(bound: tuple[int, int]) -> pd.DataFrame:
+        start, end = bound
+        return pd.concat(
+            [
+                feature_patient(group, include_hemodynamics=True)
+                for _, group in frame.iloc[start:end].groupby("Patient_ID", sort=False)
+            ],
+            ignore_index=True,
+        )
+
     features = pd.concat(
-        [feature_patient(group, include_hemodynamics=True) for _, group in frame.groupby("Patient_ID", sort=False)],
-        ignore_index=True,
+        ordered_parallel_map(feature_batch, bounds, workers), ignore_index=True
     )
     if len(features) != len(frame) or features.duplicated(["Patient_ID", "ICULOS"]).any():
         raise PipelineError("Feature construction changed row identity")
@@ -721,6 +763,26 @@ def parallel_candidate_workers(gpu: dict[str, Any], task_count: int) -> int:
     if requested < 1 or requested > maximum:
         raise PipelineError(
             f"Parallel candidate workers must be between 1 and {maximum}; got {requested}"
+        )
+    return requested
+
+
+def stage_worker_count(stage: str, task_count: int) -> int:
+    if stage not in ("prepare", "finalize") or task_count < 1:
+        raise PipelineError("Stage parallel scheduling requires prepare/finalize tasks")
+    raw = os.environ.get("SEPSIS_STAGE_WORKERS", "1")
+    try:
+        requested = int(raw)
+    except ValueError as exc:
+        raise PipelineError("SEPSIS_STAGE_WORKERS must be an integer") from exc
+    maximum = min(
+        int(STAGE_POLICY[f"{stage}_workers"]),
+        allocated_total_cpu_count(),
+        task_count,
+    )
+    if requested < 1 or requested > maximum:
+        raise PipelineError(
+            f"{stage} workers must be between 1 and {maximum}; got {requested}"
         )
     return requested
 
@@ -2278,7 +2340,11 @@ def prepare_direct_onset_stage(root: Path, archive: Path, run_dir: Path, run_id:
             "features.csv", "features_manifest.json", "folds.csv",
             "folds_manifest.json", "cohort_flow.json",
         ),
-        {"run_id": run_id, "pipeline_version": PIPELINE_VERSION},
+        {
+            "run_id": run_id,
+            "pipeline_version": PIPELINE_VERSION,
+            "stage_workers": stage_worker_count("prepare", DATA_POLICY["patient_count"]),
+        },
     )
 
 
@@ -2430,13 +2496,22 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
     _require_stage(run_dir, "model")
     if (run_dir / "finalize_stage_manifest.json").exists():
         raise PipelineError("Finalize stage refuses to overwrite existing evidence")
+    workers = stage_worker_count("finalize", len(onset.REPRESENTATIONS))
     summaries = {}
     oofs = {}
     artifacts = []
-    for representation in onset.REPRESENTATIONS:
+
+    def summarize_representation(representation: str):
         oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
+        return representation, oof, primary_model_summary(
+            oof, representation, run_dir
+        )
+
+    for representation, oof, summary in ordered_parallel_map(
+        summarize_representation, onset.REPRESENTATIONS, workers
+    ):
         oofs[representation] = oof
-        summaries[representation] = primary_model_summary(oof, representation, run_dir)
+        summaries[representation] = summary
         artifacts.extend([
             f"{representation}_metrics.json", f"{representation}_dca.csv",
             f"{representation}_reliability.csv", f"{representation}_alarm_events.csv",
@@ -2516,7 +2591,11 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
         run_dir,
         "finalize",
         artifacts,
-        {"run_id": run_id, "scientific_status": gate_status["scientific_status"]},
+        {
+            "run_id": run_id,
+            "scientific_status": gate_status["scientific_status"],
+            "stage_workers": workers,
+        },
     )
     initial = {
         "runtime": json.loads((run_dir / "runtime_manifest.json").read_text(encoding="utf-8")),
@@ -2535,6 +2614,164 @@ def finalize_direct_onset_stage(root: Path, run_dir: Path, run_id: str) -> dict[
     }
     atomic_json(run_dir / "result_manifest.json", initial)
     return stage
+
+
+def _validate_representation_artifacts(
+    run_dir: Path,
+    representation: str,
+    expected_identity: pd.DataFrame,
+    metrics: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Recompute one representation independently; safe to run concurrently."""
+    oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
+    if list(oof.columns) != PRIMARY_OOF_COLUMNS:
+        raise PipelineError(f"{representation} OOF schema is invalid")
+    identity = oof[PRIMARY_OOF_COLUMNS[:11]].sort_values(
+        ["Patient_ID", "ICULOS"], kind="mergesort"
+    ).reset_index(drop=True)
+    if not identity.equals(expected_identity):
+        raise PipelineError(f"{representation} OOF identity does not match features/folds")
+    recomputed = onset.primary_performance(oof, "prob_calibrated")
+    if any(metrics[representation].get(name) != value for name, value in recomputed.items()):
+        raise PipelineError(f"{representation} primary metrics do not reproduce from OOF")
+    reported_summary = json.loads(
+        (run_dir / f"{representation}_metrics.json").read_text(encoding="utf-8")
+    )
+    if stable_hash(reported_summary) != stable_hash(metrics[representation]):
+        raise PipelineError(f"{representation} metric products disagree")
+    decisions = onset.primary_decisions(oof)
+    calibration = calibration_metrics(
+        binary_array(decisions[onset.TARGET_COLUMN], f"{representation} calibration validation"),
+        probability_array(decisions["prob_calibrated"], f"{representation} calibration validation"),
+        onset.equal_patient_weights(decisions),
+    )
+    reported_calibration = reported_summary.get("calibration", {})
+    if (
+        any(
+            not np.isclose(reported_calibration.get(name, math.nan), value)
+            for name, value in calibration.items()
+        )
+        or reported_calibration.get("uncertainty_repeats")
+        != FEATURE_POLICY["calibration_patient_cluster_bootstrap_repeats"]
+        or any(
+            not np.isfinite(reported_calibration.get(f"{name}_ci_95_low", math.nan))
+            or not np.isfinite(reported_calibration.get(f"{name}_ci_95_high", math.nan))
+            or reported_calibration[f"{name}_ci_95_low"]
+            > reported_calibration[f"{name}_ci_95_high"]
+            for name in calibration
+        )
+    ):
+        raise PipelineError(f"{representation} calibration report is not traceable to OOF")
+    utility = challenge_utility(
+        oof.assign(
+            _policy=(
+                oof["prob_calibrated"] >= oof["nested_alarm_threshold"]
+            ).astype(float)
+        ),
+        "_policy",
+        0.5,
+    )
+    if not np.isclose(
+        reported_summary.get("challenge_label_secondary", {}).get(
+            "utility_at_nested_onset_alarm_policy", math.nan
+        ),
+        utility,
+    ):
+        raise PipelineError(f"{representation} official Utility does not reproduce from OOF")
+    expected_dca = pd.DataFrame(onset.decision_curve(
+        oof,
+        "prob_calibrated",
+        FEATURE_POLICY["dca_threshold_probabilities"],
+        repeats=FEATURE_POLICY["dca_patient_cluster_bootstrap_repeats"],
+        seed=SEED,
+    ))
+    observed_dca = pd.read_csv(run_dir / f"{representation}_dca.csv")
+    try:
+        pd.testing.assert_frame_equal(
+            observed_dca, expected_dca,
+            check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise PipelineError(f"{representation} DCA does not reproduce from OOF") from exc
+    selection = pd.read_csv(run_dir / f"{representation}_nested_selection.csv")
+    inner_selection = pd.read_csv(run_dir / f"{representation}_inner_selection.csv")
+    validate_primary_nested_provenance(selection, inner_selection, representation)
+    selected_threshold = selection.set_index("outer_fold")[
+        "nested_alarm_threshold_from_inner_oof_only"
+    ]
+    if not oof["nested_alarm_threshold"].eq(oof["Fold"].map(selected_threshold)).all():
+        raise PipelineError(f"{representation} OOF alarm thresholds do not match nested selection")
+    expected_reliability = pd.DataFrame(onset.primary_reliability_rows(
+        oof, "prob_calibrated", representation, FEATURE_POLICY["ece_equal_width_bins"]
+    ))
+    observed_reliability = pd.read_csv(run_dir / f"{representation}_reliability.csv")
+    try:
+        pd.testing.assert_frame_equal(
+            observed_reliability, expected_reliability,
+            check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise PipelineError(f"{representation} reliability data do not reproduce from OOF") from exc
+    expected_events = pd.DataFrame(onset.alarm_event_rows(
+        oof, "prob_calibrated", "nested_alarm_threshold"
+    ))
+    observed_events = pd.read_csv(run_dir / f"{representation}_alarm_events.csv")
+    numeric_event_columns = [
+        column for column in expected_events.columns
+        if column not in {
+            "Patient_ID", "alarm_episode_times_iculos", "useful_alarm_episode_times_iculos"
+        }
+    ]
+    if (
+        list(observed_events.columns) != list(expected_events.columns)
+        or not observed_events["Patient_ID"].astype(str).equals(
+            expected_events["Patient_ID"].astype(str)
+        )
+        or not np.allclose(
+            observed_events[numeric_event_columns].to_numpy(dtype=float),
+            expected_events[numeric_event_columns].to_numpy(dtype=float),
+            equal_nan=True,
+        )
+        or any(
+            not observed_events[column].fillna("").astype(str).equals(
+                expected_events[column].fillna("").astype(str)
+            )
+            for column in (
+                "alarm_episode_times_iculos", "useful_alarm_episode_times_iculos"
+            )
+        )
+    ):
+        raise PipelineError(f"{representation} alarm-event data do not reproduce from OOF")
+    recomputed_alarm = onset.alarm_metrics(
+        oof, "prob_calibrated", "nested_alarm_threshold"
+    )
+    reported_alarm = metrics[representation]["alarm_policy"]
+    for name in (
+        "n_patients_with_predictions", "n_monitored_patients", "n_alarm_episodes",
+        "n_onset_eligible_septic_patients", "tp_patients", "fn_patients",
+        "false_alarm_episodes", "false_alarm_episodes_per_patient_day",
+        "repeated_alarm_episodes", "late_pre_onset_alarm_episodes",
+        "post_onset_alarm_episodes", "right_censored_alarm_episodes",
+        "useful_sensitivity", "median_lead_time_hours",
+        "left_censored_unclassified_alarm_episodes", "alarm_episode_policy",
+    ):
+        reported_value = reported_alarm.get(name)
+        recomputed_value = recomputed_alarm[name]
+        equal = (
+            (
+                reported_value is None
+                if not np.isfinite(recomputed_value)
+                else bool(np.isclose(reported_value, recomputed_value))
+            )
+            if isinstance(recomputed_value, (int, float))
+            and not isinstance(recomputed_value, bool)
+            else reported_value == recomputed_value
+        )
+        if not equal:
+            raise PipelineError(
+                f"{representation} alarm metric {name} is not traceable to OOF"
+            )
+    return oof, identity
 
 
 def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -> dict[str, Any]:
@@ -2557,6 +2794,13 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or current.get("run_id") != manifest.get("runtime", {}).get("run_id")
         ):
             raise PipelineError(f"Manifest does not contain the current {stage} stage")
+    if (
+        manifest["stage_manifests"]["prepare"].get("stage_workers")
+        != STAGE_POLICY["prepare_workers"]
+        or manifest["stage_manifests"]["finalize"].get("stage_workers")
+        != STAGE_POLICY["finalize_workers"]
+    ):
+        raise PipelineError("Prepare/finalize worker provenance is invalid")
     if stable_hash(_require_stage(run_dir, "model").get("robustness_policy")) != stable_hash(
         ROBUSTNESS_POLICY
     ):
@@ -2573,6 +2817,7 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         or runtime.get("feature_policy_hash") != stable_hash(FEATURE_POLICY)
         or runtime.get("model_policy_hash") != stable_hash(MODEL_POLICY)
         or runtime.get("robustness_policy_hash") != stable_hash(ROBUSTNESS_POLICY)
+        or runtime.get("stage_policy_hash") != stable_hash(STAGE_POLICY)
         or runtime.get("primary_target_policy_hash") != stable_hash(onset.TARGET_POLICY)
         or runtime.get("koopman_policy_hash") != stable_hash(onset.KOOPMAN_POLICY)
         or runtime.get("direct_onset_calibration_policy_hash") != stable_hash(onset.CALIBRATION_POLICY)
@@ -2649,145 +2894,20 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     if set(metrics) != set(onset.REPRESENTATIONS):
         raise PipelineError("Combined metrics do not contain exactly C0--C3")
-    identities = []
-    validated_oofs = {}
-    for representation in onset.REPRESENTATIONS:
-        oof = pd.read_csv(run_dir / f"{representation}_oof_predictions.csv")
-        validated_oofs[representation] = oof
-        if list(oof.columns) != PRIMARY_OOF_COLUMNS:
-            raise PipelineError(f"{representation} OOF schema is invalid")
-        identity = oof[PRIMARY_OOF_COLUMNS[:11]].sort_values(["Patient_ID", "ICULOS"], kind="mergesort").reset_index(drop=True)
-        if not identity.equals(expected_identity):
-            raise PipelineError(f"{representation} OOF identity does not match features/folds")
-        identities.append(identity)
-        recomputed = onset.primary_performance(oof, "prob_calibrated")
-        if any(metrics[representation].get(name) != value for name, value in recomputed.items()):
-            raise PipelineError(f"{representation} primary metrics do not reproduce from OOF")
-        reported_summary = json.loads(
-            (run_dir / f"{representation}_metrics.json").read_text(encoding="utf-8")
-        )
-        if stable_hash(reported_summary) != stable_hash(metrics[representation]):
-            raise PipelineError(f"{representation} metric products disagree")
-        decisions = onset.primary_decisions(oof)
-        calibration = calibration_metrics(
-            binary_array(decisions[onset.TARGET_COLUMN], f"{representation} calibration validation"),
-            probability_array(decisions["prob_calibrated"], f"{representation} calibration validation"),
-            onset.equal_patient_weights(decisions),
-        )
-        reported_calibration = reported_summary.get("calibration", {})
-        if (
-            any(
-                not np.isclose(reported_calibration.get(name, math.nan), value)
-                for name, value in calibration.items()
-            )
-            or reported_calibration.get("uncertainty_repeats")
-            != FEATURE_POLICY["calibration_patient_cluster_bootstrap_repeats"]
-            or any(
-                not np.isfinite(reported_calibration.get(f"{name}_ci_95_low", math.nan))
-                or not np.isfinite(reported_calibration.get(f"{name}_ci_95_high", math.nan))
-                or reported_calibration[f"{name}_ci_95_low"]
-                > reported_calibration[f"{name}_ci_95_high"]
-                for name in calibration
-            )
-        ):
-            raise PipelineError(f"{representation} calibration report is not traceable to OOF")
-        utility = challenge_utility(
-            oof.assign(
-                _policy=(
-                    oof["prob_calibrated"] >= oof["nested_alarm_threshold"]
-                ).astype(float)
+    validation = ordered_parallel_map(
+        lambda representation: (
+            representation,
+            *_validate_representation_artifacts(
+                run_dir, representation, expected_identity, metrics
             ),
-            "_policy",
-            0.5,
-        )
-        if not np.isclose(
-            reported_summary.get("challenge_label_secondary", {}).get(
-                "utility_at_nested_onset_alarm_policy", math.nan
-            ),
-            utility,
-        ):
-            raise PipelineError(f"{representation} official Utility does not reproduce from OOF")
-        expected_dca = pd.DataFrame(onset.decision_curve(
-            oof,
-            "prob_calibrated",
-            FEATURE_POLICY["dca_threshold_probabilities"],
-            repeats=FEATURE_POLICY["dca_patient_cluster_bootstrap_repeats"],
-            seed=SEED,
-        ))
-        observed_dca = pd.read_csv(run_dir / f"{representation}_dca.csv")
-        try:
-            pd.testing.assert_frame_equal(
-                observed_dca, expected_dca,
-                check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
-            )
-        except AssertionError as exc:
-            raise PipelineError(f"{representation} DCA does not reproduce from OOF") from exc
-        selection = pd.read_csv(run_dir / f"{representation}_nested_selection.csv")
-        inner_selection = pd.read_csv(run_dir / f"{representation}_inner_selection.csv")
-        validate_primary_nested_provenance(selection, inner_selection, representation)
-        selected_threshold = selection.set_index("outer_fold")[
-            "nested_alarm_threshold_from_inner_oof_only"
-        ]
-        if not oof["nested_alarm_threshold"].eq(oof["Fold"].map(selected_threshold)).all():
-            raise PipelineError(f"{representation} OOF alarm thresholds do not match nested selection")
-        expected_reliability = pd.DataFrame(onset.primary_reliability_rows(
-            oof, "prob_calibrated", representation, FEATURE_POLICY["ece_equal_width_bins"]
-        ))
-        observed_reliability = pd.read_csv(run_dir / f"{representation}_reliability.csv")
-        try:
-            pd.testing.assert_frame_equal(
-                observed_reliability, expected_reliability,
-                check_dtype=False, check_exact=False, rtol=1e-12, atol=1e-12,
-            )
-        except AssertionError as exc:
-            raise PipelineError(f"{representation} reliability data do not reproduce from OOF") from exc
-        expected_events = pd.DataFrame(onset.alarm_event_rows(
-            oof, "prob_calibrated", "nested_alarm_threshold"
-        ))
-        observed_events = pd.read_csv(run_dir / f"{representation}_alarm_events.csv")
-        numeric_event_columns = [
-            column for column in expected_events.columns
-            if column not in {"Patient_ID", "alarm_episode_times_iculos", "useful_alarm_episode_times_iculos"}
-        ]
-        if (
-            list(observed_events.columns) != list(expected_events.columns)
-            or not observed_events["Patient_ID"].astype(str).equals(expected_events["Patient_ID"].astype(str))
-            or not np.allclose(
-                observed_events[numeric_event_columns].to_numpy(dtype=float),
-                expected_events[numeric_event_columns].to_numpy(dtype=float),
-                equal_nan=True,
-            )
-            or any(
-                not observed_events[column].fillna("").astype(str).equals(expected_events[column].fillna("").astype(str))
-                for column in ("alarm_episode_times_iculos", "useful_alarm_episode_times_iculos")
-            )
-        ):
-            raise PipelineError(f"{representation} alarm-event data do not reproduce from OOF")
-        recomputed_alarm = onset.alarm_metrics(oof, "prob_calibrated", "nested_alarm_threshold")
-        reported_alarm = metrics[representation]["alarm_policy"]
-        for name in (
-            "n_patients_with_predictions", "n_monitored_patients", "n_alarm_episodes",
-            "n_onset_eligible_septic_patients",
-            "tp_patients", "fn_patients", "false_alarm_episodes",
-            "false_alarm_episodes_per_patient_day", "repeated_alarm_episodes",
-            "late_pre_onset_alarm_episodes", "post_onset_alarm_episodes",
-            "right_censored_alarm_episodes", "useful_sensitivity", "median_lead_time_hours",
-            "left_censored_unclassified_alarm_episodes",
-            "alarm_episode_policy",
-        ):
-            reported_value = reported_alarm.get(name)
-            recomputed_value = recomputed_alarm[name]
-            equal = (
-                (
-                    reported_value is None
-                    if not np.isfinite(recomputed_value)
-                    else bool(np.isclose(reported_value, recomputed_value))
-                )
-                if isinstance(recomputed_value, (int, float)) and not isinstance(recomputed_value, bool)
-                else reported_value == recomputed_value
-            )
-            if not equal:
-                raise PipelineError(f"{representation} alarm metric {name} is not traceable to OOF")
+        ),
+        onset.REPRESENTATIONS,
+        stage_worker_count("finalize", len(onset.REPRESENTATIONS)),
+    )
+    validated_oofs = {
+        representation: oof for representation, oof, _ in validation
+    }
+    identities = [identity for _, _, identity in validation]
     if not all(identities[0].equals(identity) for identity in identities[1:]):
         raise PipelineError("C0--C3 OOF identities are not paired")
     expected_ablation = representation_ablation_summary(metrics)
@@ -3120,7 +3240,6 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
             or selected.get("cpus")
             != fit_profile.get("cpus") * parallel_workers * parallel_candidates
             or selected.get("memory_gb") != fit_profile.get("memory_gb") * parallel_workers
-            or profile_selection.get("finalize_memory_gb") != expected_fit_memory
             or len(profile_selection.get("profiles", [])) != 6
             or (
                 selected.get("gpus") == 0
@@ -3154,10 +3273,14 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
                 for stage in stages.values()
             )
             or stages["model"].get("requested") != selected
-            or stages["prepare"].get("requested") != {"cpus": 1, "memory_gb": 10, "gpus": 0}
+            or stages["prepare"].get("requested") != {
+                "cpus": STAGE_POLICY["prepare_workers"],
+                "memory_gb": STAGE_POLICY["prepare_memory_gb"],
+                "gpus": 0,
+            }
             or stages["finalize"].get("requested") != {
-                "cpus": 1,
-                "memory_gb": profile_selection.get("finalize_memory_gb"),
+                "cpus": STAGE_POLICY["finalize_workers"],
+                "memory_gb": STAGE_POLICY["finalize_memory_gb"],
                 "gpus": 0,
             }
             or any(stage.get("run_id") != runtime.get("run_id") for stage in stages.values())

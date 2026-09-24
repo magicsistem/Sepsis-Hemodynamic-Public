@@ -8,6 +8,10 @@ export PYTHONHASHSEED=20260906
 export PYTHONWARNINGS=error
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 SOURCE_SIDECAR="$ROOT/.source_provenance.json"
+PREPARE_CPUS=16
+PREPARE_MEMORY_GB=32
+FINALIZE_CPUS=4
+FINALIZE_MEMORY_GB=32
 
 if [[ "${1:-}" == --inside-slurm ]]; then
     STAGE=${2:-}
@@ -137,7 +141,7 @@ if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py ve
     PREPARE_JOB=reused
 else
     [[ "$RESUMING" == false ]] || { echo "FAIL: incomplete/invalid prepare stage is preserved; use a fresh run ID" >&2; exit 1; }
-    PREPARE_JOB=$(submit_stage prepare 1 10 0 "$PREVIOUS_JOB")
+    PREPARE_JOB=$(submit_stage prepare "$PREPARE_CPUS" "$PREPARE_MEMORY_GB" 0 "$PREVIOUS_JOB")
     wait_job "$PREPARE_JOB"
     PREVIOUS_JOB=$PREPARE_JOB
 fi
@@ -153,7 +157,7 @@ for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     fi
 done
 "$HOST_PYTHON" scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
-read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS MODEL_FIT_THREADS MODEL_WORKERS MODEL_CANDIDATES FINALIZE_MEMORY < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
+read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS MODEL_FIT_THREADS MODEL_WORKERS MODEL_CANDIDATES < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
@@ -162,7 +166,6 @@ fit = payload["fit_profile"]
 print(
     selected["cpus"], selected["memory_gb"], selected["gpus"],
     fit["cpus"], payload["parallel_workers"], payload["parallel_candidates"],
-    payload["finalize_memory_gb"],
 )
 PY
 )
@@ -209,13 +212,13 @@ PY
         exit 0
     fi
     [[ "$RESULT_STATUS" == PENDING_RESOURCE_AND_FINAL_VALIDATION ]] || { echo "FAIL: finalized run has invalid result status $RESULT_STATUS" >&2; exit 1; }
-    FINALIZE_JOB=$(submit_stage promote 1 "$FINALIZE_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage promote "$FINALIZE_CPUS" "$FINALIZE_MEMORY_GB" 0 "$PREVIOUS_JOB")
 else
     if [[ "$RESUMING" == true ]] && [[ -e "$RUN_DIR/metrics.json" || -e "$RUN_DIR/result_manifest.json" ]]; then
         echo "FAIL: partial finalize artifacts are preserved; use a fresh run ID" >&2
         exit 1
     fi
-    FINALIZE_JOB=$(submit_stage finalize 1 "$FINALIZE_MEMORY" 0 "$PREVIOUS_JOB")
+    FINALIZE_JOB=$(submit_stage finalize "$FINALIZE_CPUS" "$FINALIZE_MEMORY_GB" 0 "$PREVIOUS_JOB")
 fi
 wait_job "$FINALIZE_JOB"
 printf 'SCIENTIFIC_RUN_PASS run_id=%s test_job=%s prepare_job=%s model_job=%s finalize_job=%s run_dir=%s\n' \
