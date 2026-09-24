@@ -104,7 +104,7 @@ class KoopmanOracleTests(unittest.TestCase):
             second = koopman.fit_koopman(train, ("HR",), "identity", selected_signals=("HR",))
         self.assertEqual(first.training_transition_counts, {"HR": 3})
         np.testing.assert_array_equal(first.models["HR"].coef_, second.models["HR"].coef_)
-        with mock.patch.dict(koopman.os.environ, {"SLURM_CPUS_PER_TASK": "33"}):
+        with mock.patch.dict(koopman.os.environ, {"SEPSIS_FIT_THREADS": "33"}):
             with self.assertRaises(koopman.OnsetKoopmanError):
                 koopman.fit_koopman(train, ("HR",), "identity", selected_signals=("HR",))
 
