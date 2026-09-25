@@ -573,7 +573,10 @@ class InferenceTransportTests(unittest.TestCase):
             path = Path(directory) / "alarm_events.csv"
             pipeline.atomic_csv(expected, path)
             observed = pipeline.read_alarm_event_artifact(path)
-        self.assertEqual(observed.loc[0, "useful_alarm_episode_times_iculos"], "4")
+        useful_time = observed.loc[
+            observed["Patient_ID"] == "A:s1", "useful_alarm_episode_times_iculos"
+        ].iloc[0]
+        self.assertEqual(useful_time, "4")
         pd.testing.assert_frame_equal(observed, expected, check_dtype=False)
 
     def test_transport_contract_never_fits_destination_labels(self):
