@@ -171,7 +171,9 @@ def read_alarm_event_artifact(path: Path) -> pd.DataFrame:
         "Patient_ID", "alarm_episode_times_iculos",
         "useful_alarm_episode_times_iculos",
     )
-    return pd.read_csv(path, dtype={column: str for column in text_columns})
+    frame = pd.read_csv(path, dtype={column: str for column in text_columns})
+    frame.loc[:, text_columns] = frame.loc[:, text_columns].fillna("")
+    return frame
 
 
 def git_value(root: Path, *args: str) -> str:
