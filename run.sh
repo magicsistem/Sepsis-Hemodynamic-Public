@@ -97,11 +97,24 @@ if [[ -n "${RESUME_RUN_ID:-}" ]]; then
     RUN_DIR="$ROOT/runs/$RUN_ID"
     [[ -d "$RUN_DIR" ]] || { echo "FAIL: resume run directory not found: $RUN_DIR" >&2; exit 1; }
     RESUMING=true
+    read -r PRODUCER_GIT_COMMIT PRODUCER_SOURCE_INVENTORY < <("$HOST_PYTHON" - "$RUN_DIR/runtime_manifest.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    runtime = json.load(handle)
+print(runtime.get("git_commit", ""), runtime.get("source_inventory_sha256", ""))
+PY
+)
+    [[ ${#PRODUCER_GIT_COMMIT} -eq 40 && ${#PRODUCER_SOURCE_INVENTORY} -eq 64 ]] || {
+        echo "FAIL: resumed run lacks exact producer source provenance" >&2
+        exit 1
+    }
 else
     RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_GIT_COMMIT:0:7}}"
     RUN_DIR="$ROOT/runs/$RUN_ID"
     [[ ! -e "$RUN_DIR" ]] || { echo "FAIL: refusing to overwrite $RUN_DIR" >&2; exit 1; }
     RESUMING=false
+    PRODUCER_GIT_COMMIT="$SOURCE_GIT_COMMIT"
+    PRODUCER_SOURCE_INVENTORY="$SOURCE_INVENTORY_SHA256"
 fi
 
 wait_job() {
@@ -137,7 +150,7 @@ fi
 TEST_JOB=$(submit_stage tests 1 2 0 "" "" "$TEST_RUN_DIR")
 wait_job "$TEST_JOB"
 PREVIOUS_JOB=$TEST_JOB
-if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage prepare --run-id "$RUN_ID" --git-commit "$PRODUCER_GIT_COMMIT" --source-inventory "$PRODUCER_SOURCE_INVENTORY" >/dev/null; then
     PREPARE_JOB=reused
 else
     [[ "$RESUMING" == false ]] || { echo "FAIL: incomplete/invalid prepare stage is preserved; use a fresh run ID" >&2; exit 1; }
@@ -147,7 +160,7 @@ else
 fi
 for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
     IFS=: read -r name cpus gpus <<< "$spec"
-    if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+    if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-profile --profile-dir "$RUN_DIR/profiles" --name "$name" --cpus "$cpus" --memory-gb 32 --gpus "$gpus" --run-id "$RUN_ID" --git-commit "$PRODUCER_GIT_COMMIT" --source-inventory "$PRODUCER_SOURCE_INVENTORY" >/dev/null; then
         PROFILE_JOB=reused
     else
         [[ "$RESUMING" == false || ( ! -e "$RUN_DIR/profiles/$name.json" && ! -e "$RUN_DIR/profiles/$name-benchmark.json" ) ]] || { echo "FAIL: invalid partial profile $name is preserved; use a fresh run ID" >&2; exit 1; }
@@ -156,7 +169,22 @@ for spec in cpu8:8:0 cpu16:16:0 cpu32:32:0 gpu8:8:1 gpu16:16:1 gpu32:32:1; do
         PREVIOUS_JOB=$PROFILE_JOB
     fi
 done
-"$HOST_PYTHON" scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
+if [[ "$RESUMING" == true ]]; then
+    "$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" "$RUN_ID" "$PRODUCER_GIT_COMMIT" "$PRODUCER_SOURCE_INVENTORY" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    selection = json.load(handle)
+if (
+    selection.get("status") != "PASS"
+    or selection.get("run_id") != sys.argv[2]
+    or selection.get("source_git_commit") != sys.argv[3]
+    or selection.get("source_inventory_sha256") != sys.argv[4]
+):
+    raise SystemExit("FAIL: resumed profile selection differs from producer context")
+PY
+else
+    "$HOST_PYTHON" scripts/resource_provenance.py select-profile --profile-dir "$RUN_DIR/profiles" --output "$RUN_DIR/resource_profile_selection.json" --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256"
+fi
 read -r MODEL_CPUS MODEL_MEMORY MODEL_GPUS MODEL_FIT_THREADS MODEL_WORKERS MODEL_CANDIDATES < <("$HOST_PYTHON" - "$RUN_DIR/resource_profile_selection.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -189,7 +217,7 @@ if [[ "$MODE" == profile ]]; then
     printf 'RESOURCE_PROFILE_PASS run_id=%s selection=%s selected_model_job=%s\n' "$RUN_ID" "$RUN_DIR/resource_profile_selection.json" "$SELECTED_PROFILE_JOB"
     exit 0
 fi
-if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage model --run-id "$RUN_ID" --git-commit "$PRODUCER_GIT_COMMIT" --source-inventory "$PRODUCER_SOURCE_INVENTORY" >/dev/null; then
     MODEL_JOB=reused
 else
     if [[ "$RESUMING" == true ]] && compgen -G "$RUN_DIR/*_oof_predictions.csv" >/dev/null; then
@@ -200,7 +228,7 @@ else
     wait_job "$MODEL_JOB"
     PREVIOUS_JOB=$MODEL_JOB
 fi
-if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$SOURCE_GIT_COMMIT" --source-inventory "$SOURCE_INVENTORY_SHA256" >/dev/null; then
+if [[ "$RESUMING" == true ]] && "$HOST_PYTHON" scripts/resource_provenance.py verify-stage --run-dir "$RUN_DIR" --stage finalize --run-id "$RUN_ID" --git-commit "$PRODUCER_GIT_COMMIT" --source-inventory "$PRODUCER_SOURCE_INVENTORY" >/dev/null; then
     RESULT_STATUS=$("$HOST_PYTHON" - "$RUN_DIR/result_manifest.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:

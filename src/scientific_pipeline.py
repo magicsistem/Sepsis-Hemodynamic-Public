@@ -165,6 +165,15 @@ def atomic_csv(frame: pd.DataFrame, path: Path) -> None:
     temporary.replace(path)
 
 
+def read_alarm_event_artifact(path: Path) -> pd.DataFrame:
+    """Preserve serialized alarm-time text across the CSV round trip."""
+    text_columns = (
+        "Patient_ID", "alarm_episode_times_iculos",
+        "useful_alarm_episode_times_iculos",
+    )
+    return pd.read_csv(path, dtype={column: str for column in text_columns})
+
+
 def git_value(root: Path, *args: str) -> str:
     completed = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=False)
     return completed.stdout.strip() if completed.returncode == 0 else "unavailable"
@@ -2715,7 +2724,9 @@ def _validate_representation_artifacts(
     expected_events = pd.DataFrame(onset.alarm_event_rows(
         oof, "prob_calibrated", "nested_alarm_threshold"
     ))
-    observed_events = pd.read_csv(run_dir / f"{representation}_alarm_events.csv")
+    observed_events = read_alarm_event_artifact(
+        run_dir / f"{representation}_alarm_events.csv"
+    )
     numeric_event_columns = [
         column for column in expected_events.columns
         if column not in {
@@ -2784,6 +2795,22 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         raise PipelineError("Direct-onset computational status is invalid")
     if manifest.get("scientific_status") not in DIRECT_ONSET_STATUSES:
         raise PipelineError("Direct-onset scientific status is invalid")
+    if not allow_pending:
+        validation = manifest.get("final_validation", {})
+        validator_commit = str(validation.get("validator_git_commit", ""))
+        validator_inventory = str(
+            validation.get("validator_source_inventory_sha256", "")
+        )
+        if (
+            validation.get("status") != "PASS"
+            or len(validator_commit) != 40
+            or len(validator_inventory) != 64
+            or any(character not in "0123456789abcdef" for character in validator_commit)
+            or any(character not in "0123456789abcdef" for character in validator_inventory)
+            or validation.get("validator_git_dirty") is not False
+            or validation.get("validator_pipeline_version") != PIPELINE_VERSION
+        ):
+            raise PipelineError("Final validator source provenance is invalid")
     if "lineage" not in manifest:
         raise PipelineError("Direct-onset artifact lineage is missing")
     validate_lineage_nodes(run_dir, manifest["lineage"])
@@ -3336,6 +3363,22 @@ def promote_direct_onset_manifest(run_dir: Path) -> dict[str, Any]:
     )
     manifest["artifact_sha256"] = artifact_hashes(run_dir)
     manifest["computational_status"] = "COMPUTATIONAL_RUN_VALIDATED"
-    manifest["final_validation"] = {"status": "PASS", "validated_at_utc": utc_now()}
+    validator_commit = os.environ.get("SOURCE_GIT_COMMIT", "")
+    validator_inventory = os.environ.get("SOURCE_INVENTORY_SHA256", "")
+    validator_dirty = os.environ.get("SOURCE_GIT_DIRTY", "").lower() != "false"
+    if (
+        len(validator_commit) != 40
+        or len(validator_inventory) != 64
+        or validator_dirty
+    ):
+        raise PipelineError("Final validation requires exact validator source provenance")
+    manifest["final_validation"] = {
+        "status": "PASS",
+        "validated_at_utc": utc_now(),
+        "validator_git_commit": validator_commit,
+        "validator_git_dirty": validator_dirty,
+        "validator_source_inventory_sha256": validator_inventory,
+        "validator_pipeline_version": PIPELINE_VERSION,
+    }
     atomic_json(manifest_path, manifest)
     return validate_direct_onset_manifest(run_dir)

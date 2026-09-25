@@ -98,3 +98,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   CHECK: python -m unittest tests.test_scientific_pipeline.ScientificPipelineTests.test_parallel_prepare_matches_serial_order_and_features tests.test_onset_koopman.ResourceOrchestrationTests -v && bash -n run.sh && bash -n jobs/run_experiment.slurm && printf 'G23_BOUNDED_STAGE_PARALLELISM_PASS\n'
   EXPECT: G23_BOUNDED_STAGE_PARALLELISM_PASS
   EVIDENCE: 16-worker prepare and four-worker C0--C3 finalize/validation are implemented with native threads fixed at one; serial/parallel parity and exact resource-contract oracles are added. Exact-container verification and final stage resource evidence remain pending.
+
+- [ ] G24: alarm-event CSV validation preserves serialized time text, and a validation-only resume reuses hash-verified producer checkpoints while recording the distinct clean validator source
+  CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests.test_alarm_event_csv_round_trip_preserves_single_useful_time tests.test_onset_koopman.ResourceOrchestrationTests.test_one_entrypoint_compute_node_and_fail_closed_dependencies -v && bash -n run.sh && printf 'G24_VALIDATION_RESUME_PASS\n'
+  EXPECT: G24_VALIDATION_RESUME_PASS
+  EVIDENCE: finalize job 27341 generated a complete PASS stage but promotion failed closed because pandas inferred the single-useful-time text column as float. Independent stdlib recomputation matched all 40,336 C0 patients; current-source container oracle and validation-only resume remain pending.

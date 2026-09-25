@@ -564,6 +564,18 @@ class InferenceTransportTests(unittest.TestCase):
             paired_dca[0]["uncertainty_unit"], "paired patient-cluster bootstrap"
         )
 
+    def test_alarm_event_csv_round_trip_preserves_single_useful_time(self):
+        frame = primary_oof()
+        expected = pd.DataFrame(koopman.alarm_event_rows(
+            frame, "prob_calibrated", "nested_alarm_threshold"
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alarm_events.csv"
+            pipeline.atomic_csv(expected, path)
+            observed = pipeline.read_alarm_event_artifact(path)
+        self.assertEqual(observed.loc[0, "useful_alarm_episode_times_iculos"], "4")
+        pd.testing.assert_frame_equal(observed, expected, check_dtype=False)
+
     def test_transport_contract_never_fits_destination_labels(self):
         source = inspect.getsource(pipeline.fit_primary_source_transport)
         self.assertIn("select_inner_primary_model(\n        train", source)
@@ -892,6 +904,7 @@ class ResourceOrchestrationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         entrypoint = (root / "run.sh").read_text(encoding="utf-8")
         job = (root / "jobs" / "run_experiment.slurm").read_text(encoding="utf-8")
+        promotion = inspect.getsource(pipeline.promote_direct_onset_manifest)
         self.assertIn('TEST_RUN_DIR="$ROOT/runs/${RUN_ID}-tests-${TEST_SUFFIX}"', entrypoint)
         self.assertIn('stage_run_dir=${7:-$RUN_DIR}', entrypoint)
         self.assertIn('--dependency="afterok:$dependency"', entrypoint)
@@ -899,7 +912,12 @@ class ResourceOrchestrationTests(unittest.TestCase):
         self.assertIn('partition=cpu', entrypoint)
         self.assertIn('partition=gpu', entrypoint)
         self.assertIn("RESUME_RUN_ID", entrypoint)
+        self.assertIn("PRODUCER_GIT_COMMIT", entrypoint)
+        self.assertIn("PRODUCER_SOURCE_INVENTORY", entrypoint)
         self.assertIn("verify-stage", entrypoint)
+        self.assertIn('"validator_git_commit": validator_commit', promotion)
+        self.assertIn('"validator_git_dirty": validator_dirty', promotion)
+        self.assertIn('"validator_source_inventory_sha256": validator_inventory', promotion)
         self.assertNotIn("json.load(open(", entrypoint)
         self.assertIn('with open(sys.argv[1], encoding="utf-8") as handle:', entrypoint)
         self.assertIn("HOST_PYTHON=${HOST_PYTHON:-python3}", entrypoint)
