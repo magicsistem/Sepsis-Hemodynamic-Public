@@ -103,3 +103,8 @@ Scope: Replace the audited public pipeline with one scientifically valid, fail-c
   CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests.test_alarm_event_csv_round_trip_preserves_single_useful_time tests.test_onset_koopman.ResourceOrchestrationTests.test_one_entrypoint_compute_node_and_fail_closed_dependencies -v && bash -n run.sh && printf 'G24_VALIDATION_RESUME_PASS\n'
   EXPECT: G24_VALIDATION_RESUME_PASS
   EVIDENCE: finalize job 27341 generated a complete PASS stage but promotion failed closed because pandas inferred the single-useful-time text column as float. Independent stdlib recomputation matched all 40,336 C0 patients; current-source container oracle and validation-only resume remain pending.
+
+- [ ] G25: serialized transport inner-selection floats reproduce the exact producer provenance hash during independent validation
+  CHECK: python -m unittest tests.test_onset_koopman.InferenceTransportTests.test_transport_selection_hash_survives_csv_round_trip -v && printf 'G25_TRANSPORT_HASH_PASS\n'
+  EXPECT: G25_TRANSPORT_HASH_PASS
+  EVIDENCE: promotion job 27369 confirmed every structural and numerical transport condition but failed because pandas' fast CSV parser changed the least-significant float bit before hashing. Round-trip parsing reproduces all eight producer hashes locally; exact-container verification and validation-only promotion remain pending.

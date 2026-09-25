@@ -579,6 +579,29 @@ class InferenceTransportTests(unittest.TestCase):
         self.assertEqual(useful_time, "4")
         pd.testing.assert_frame_equal(observed, expected, check_dtype=False)
 
+    def test_transport_selection_hash_survives_csv_round_trip(self):
+        detail = [{
+            "experiment": "train_A_test_B",
+            "representation": "C0",
+            "lift": "identity",
+            "candidate": "depth3",
+            "inner_fold": 0,
+            "patient_balanced_average_precision": 0.08180905445280512,
+            "best_round": 299,
+            "selected_signals": "[]",
+            "koopman_training_transition_counts": "{}",
+            "fit_patient_hash": "a" * 64,
+            "valid_patient_hash": "b" * 64,
+        }]
+        expected_hash = pipeline.stable_hash(detail)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "transport_inner_selection.csv"
+            pipeline.atomic_csv(pd.DataFrame(detail), path)
+            observed = pipeline.read_transport_inner_selection_artifact(path)
+        self.assertEqual(
+            pipeline.stable_hash(observed.to_dict("records")), expected_hash
+        )
+
     def test_transport_contract_never_fits_destination_labels(self):
         source = inspect.getsource(pipeline.fit_primary_source_transport)
         self.assertIn("select_inner_primary_model(\n        train", source)

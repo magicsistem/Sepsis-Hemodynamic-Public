@@ -176,6 +176,11 @@ def read_alarm_event_artifact(path: Path) -> pd.DataFrame:
     return frame
 
 
+def read_transport_inner_selection_artifact(path: Path) -> pd.DataFrame:
+    """Retain the fitted float values used by the transport provenance hash."""
+    return pd.read_csv(path, float_precision="round_trip")
+
+
 def git_value(root: Path, *args: str) -> str:
     completed = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=False)
     return completed.stdout.strip() if completed.returncode == 0 else "unavailable"
@@ -3021,7 +3026,9 @@ def validate_direct_onset_manifest(run_dir: Path, allow_pending: bool = False) -
         or not transport["destination_labels_used_for_fitting"].eq(False).all()
     ):
         raise PipelineError("Direct-onset transport provenance is invalid")
-    transport_evidence = pd.read_csv(run_dir / "transport_inner_selection.csv")
+    transport_evidence = read_transport_inner_selection_artifact(
+        run_dir / "transport_inner_selection.csv"
+    )
     evidence_required = {
         "experiment", "representation", "lift", "candidate", "inner_fold",
         "patient_balanced_average_precision", "best_round", "selected_signals",
